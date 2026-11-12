@@ -1,0 +1,17 @@
+# Entorno virtual y cachés de Python
+venv/
+__pycache__/
+*.pyc
+
+# Música descargada y carátulas (pesadas, se regeneran)
+musicplay/
+
+# Base de datos local (tu historial de escuchas)
+spotify_local.db
+puquichu.db
+
+# Respaldos manuales
+*.bak
+
+# Preferencias personales (la app las crea sola al arrancar)
+settings.json
