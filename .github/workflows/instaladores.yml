@@ -1,0 +1,87 @@
+# Arma los instaladores de Puquichu, los prueba en sistemas limpios y los publica en Releases.
+# Se ejecuta al subir una etiqueta de versión (git tag v1.2.0 && git push origin v1.2.0)
+# o a mano desde la pestaña "Actions" (sin publicar).
+name: Instaladores
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-deb:
+    name: Linux (.deb)
+    # Se construye en la versión más antigua soportada para que funcione en más equipos
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias para construir
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv vlc ffmpeg libxcb-cursor0 libxkbcommon-x11-0 libegl1
+
+      - name: Entorno de Python
+        run: |
+          python3 -m venv build-venv
+          build-venv/bin/pip install --upgrade pip
+          build-venv/bin/pip install -r requirements.txt pyinstaller
+
+      - name: Construir el .deb
+        run: PYTHON=build-venv/bin/python packaging/linux/build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puquichu-deb
+          path: build/puquichu_*_amd64.deb
+          if-no-files-found: error
+
+  probar-linux:
+    name: Probar instalación (${{ matrix.os }})
+    needs: linux-deb
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: puquichu-deb
+
+      - name: Instalar como lo haría un usuario (apt resuelve VLC, ffmpeg, etc.)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./puquichu_*_amd64.deb
+          test -x /usr/bin/puquichu
+          test -f /usr/share/applications/puquichu.desktop
+
+      - name: Arrancar la app y reproducir audio
+        run: |
+          QT_QPA_PLATFORM=offscreen PUQUICHU_SMOKE_TEST=red timeout 120 puquichu 2>&1 | tee prueba.log || true
+          grep -q "PUQUICHU_OK" prueba.log
+          grep -q "PUQUICHU_AUDIO_LOCAL_OK" prueba.log
+          # YouTube a veces bloquea servidores de centros de datos: solo se avisa, no falla
+          grep -q "PUQUICHU_AUDIO_OK" prueba.log || echo "::warning::La prueba en línea no pasó en el servidor (posible bloqueo de YouTube a centros de datos)."
+
+      - name: Desinstalar limpio
+        run: sudo apt-get remove -y puquichu && test ! -e /usr/bin/puquichu
+
+  publicar:
+    name: Publicar en Releases
+    needs: [linux-deb, probar-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: puquichu-deb
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Puquichu ${{ github.ref_name }}
+          body_path: packaging/notas-de-version.md
+          files: puquichu_*_amd64.deb

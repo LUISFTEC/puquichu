@@ -14,8 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import vlc
-import yt_dlp
-from PyQt6.QtCore import QPoint, QProcess, QSize, Qt, QTimer
+from PyQt6.QtCore import QPoint, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -46,7 +45,11 @@ from PyQt6.QtWidgets import (
 from core import (
     APP_ID,
     APP_NAME,
+    APP_VERSION,
     ASSETS_DIR,
+    DATA_DIR,
+    download_latest_ytdlp,
+    ytdlp_version,
     BASE_DIR,
     DEEZER_SOURCES,
     GENRES_LIST,
@@ -65,7 +68,13 @@ from core import (
     organize_and_classify_all_songs,
     save_settings,
 )
-from mpris import MprisService, build_metadata
+try:  # MPRIS solo existe en Linux (D-Bus)
+    from mpris import MprisService, build_metadata
+except Exception:  # pragma: no cover - Windows / macOS
+    MprisService = None
+
+    def build_metadata(*_args, **_kw):
+        return {}
 from theme import (
     SEASONS,
     C,
@@ -105,7 +114,7 @@ from widgets import (
     show_message,
 )
 
-ICON_PATH = ASSETS_DIR / "puquichu.png"
+ICON_PATH = ASSETS_DIR / "puquichu.png" if (ASSETS_DIR / "puquichu.png").exists() else DATA_DIR / "puquichu.png"
 FAV_FILTER = "__fav__"
 
 EQ_NAMES_ES = {
@@ -173,7 +182,10 @@ class PuquichuApp(QMainWindow):
         self.season = resolve_season(self.settings.get("season_theme", "auto"))
         apply_season(self.season)
         if not ICON_PATH.exists():
-            save_brand_icon(ICON_PATH)
+            try:
+                save_brand_icon(ICON_PATH)
+            except OSError:
+                pass
 
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setWindowTitle(APP_NAME)
@@ -230,8 +242,8 @@ class PuquichuApp(QMainWindow):
         self._build_ui()
         self.apply_equalizer(int(self.settings.get("equalizer", -1)))
         try:
-            self.mpris = MprisService(self)
-            if not self.mpris.ok:
+            self.mpris = MprisService(self) if MprisService else None
+            if self.mpris and not self.mpris.ok:
                 self.mpris = None
         except Exception:
             self.mpris = None
@@ -936,7 +948,7 @@ class PuquichuApp(QMainWindow):
         self.ytdlp_btn.clicked.connect(self.update_ytdlp)
         lay.addLayout(
             self._settings_row(
-                f"Motor de descargas (yt-dlp {yt_dlp.version.__version__})",
+                f"Motor de descargas (yt-dlp {ytdlp_version()})",
                 "YouTube cambia seguido; si las descargas empiezan a fallar, actualízalo.",
                 self.ytdlp_btn,
             )
@@ -947,6 +959,7 @@ class PuquichuApp(QMainWindow):
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         b.clicked.connect(self.check_missing_files)
         lay.addLayout(self._settings_row("Canciones perdidas", "Busca canciones cuyo archivo ya no existe en el disco.", b))
+        lay.addLayout(self._settings_row(f"Puquichu {APP_VERSION}", f"Tus datos se guardan en {str(DATA_DIR).replace(str(Path.home()), '~')}", None))
         vbox.addWidget(card)
 
         # Atajos
@@ -1823,7 +1836,7 @@ class PuquichuApp(QMainWindow):
         d["fmt"].setText(fmt_names.get(ext, ext.upper() or ("En línea (no guardada)" if is_stream else "—")))
         d["size"].setText(f"{size_mb:.1f} MB" if exists else "—")
         if exists and song.get("duration"):
-            d["size"].setText(f"{size_mb:.1f} MB · {round(size_mb * 8388.6 / max(1, int(song["duration"])))} kbps")
+            d["size"].setText(f"{size_mb:.1f} MB · {round(size_mb * 8388.6 / max(1, int(song['duration'])))} kbps")
         d["dur"].setText(dur)
         d["plays"].setText(str(plays) if not is_stream else "—")
         d["added"].setText(humanize_dt(song.get("added_at")) if song.get("added_at") else "—")
@@ -2755,7 +2768,7 @@ class PuquichuApp(QMainWindow):
             pass
 
     def desktop_notify(self, title: str, body: str, icon: str = ""):
-        if not self.settings.get("notifications", True) or self.isActiveWindow():
+        if not self.settings.get("notifications", True) or self.isActiveWindow() or not shutil.which("notify-send"):
             return
         icon_path = icon if icon and os.path.exists(icon) else str(ICON_PATH)
         try:
@@ -2868,24 +2881,33 @@ class PuquichuApp(QMainWindow):
         show_message(self, "Importación completada", f"Se importaron y clasificaron {plural(imported, 'canción nueva', 'canciones nuevas')}.")
 
     def update_ytdlp(self):
+        """Descarga la última versión del motor de descargas (funciona también en la app instalada)."""
         self.ytdlp_btn.setEnabled(False)
         self.ytdlp_btn.setText("Actualizando…")
-        self._pip = QProcess(self)
-        self._pip.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self._pip.finished.connect(self._on_ytdlp_updated)
-        self._pip.start(sys.executable, ["-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "yt-dlp"])
+        current = ytdlp_version()
 
-    def _on_ytdlp_updated(self, code: int, _status):
-        out = bytes(self._pip.readAll()).decode(errors="replace")
+        class _Updater(QThread):
+            done = pyqtSignal(str, str)
+
+            def run(self):
+                try:
+                    self.done.emit(download_latest_ytdlp(), "")
+                except Exception as e:  # sin internet, GitHub caído, etc.
+                    self.done.emit("", str(e))
+
+        worker = _Updater()
+        worker.done.connect(lambda ver, err, cur=current: self._on_ytdlp_updated(ver, err, cur))
+        self._start_worker(worker)
+
+    def _on_ytdlp_updated(self, version: str, error: str, current: str):
         self.ytdlp_btn.setEnabled(True)
         self.ytdlp_btn.setText("Actualizar")
-        if code != 0:
-            show_message(self, "No se pudo actualizar", out[-600:] or "Revisa tu conexión a internet.", "error")
-        elif "Successfully installed" in out:
-            ver = out.split("Successfully installed", 1)[1].strip().split()[-1]
-            show_message(self, "Motor actualizado", f"Se instaló {ver}.\nCierra y vuelve a abrir Puquichu para usar la nueva versión.")
+        if error:
+            show_message(self, "No se pudo actualizar", f"{error[:400]}\n\nRevisa tu conexión a internet.", "error")
+        elif version == current:
+            show_message(self, "Ya estás al día", f"yt-dlp {current} es la versión más reciente.")
         else:
-            show_message(self, "Ya estás al día", f"yt-dlp {yt_dlp.version.__version__} es la versión más reciente.")
+            show_message(self, "Motor actualizado", f"Se descargó yt-dlp {version}.\nCierra y vuelve a abrir Puquichu para usarlo.")
 
     def check_missing_files(self):
         with get_db() as conn:
@@ -2916,19 +2938,98 @@ class PuquichuApp(QMainWindow):
 
     @staticmethod
     def open_path(path_str: str):
-        if os.path.exists(path_str):
-            subprocess.Popen(["xdg-open", path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not os.path.exists(path_str):
+            return
+        if sys.platform.startswith("win"):
+            os.startfile(path_str)  # type: ignore[attr-defined]
+        else:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main():
+    if os.environ.get("PUQUICHU_SMOKE_TEST"):
+        import faulthandler
+
+        faulthandler.dump_traceback_later(20, exit=True)  # si se cuelga, muestra dónde
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     app.setDesktopFileName(APP_ID)
     app.setFont(QFont(UI_FONT, 10))
+    try:
+        probe = vlc.Instance("--no-xlib")
+        if probe is None:
+            raise RuntimeError("libvlc sin módulos")
+        probe.release()
+    except Exception as e:
+        print(f"PUQUICHU_VLC_ERROR {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        if os.environ.get("PUQUICHU_SMOKE_TEST"):
+            sys.exit(3)
+        from PyQt6.QtWidgets import QMessageBox
+
+        QMessageBox.critical(
+            None,
+            "Falta VLC",
+            "Puquichu usa VLC para reproducir la música, pero no está instalado.\n\n"
+            "En Ubuntu / Linux Mint / Debian ábrelo desde el Centro de software o ejecuta:\n"
+            "    sudo apt install vlc",
+        )
+        sys.exit(1)
     window = PuquichuApp()
     window.show()
+    if os.environ.get("PUQUICHU_SMOKE_TEST"):
+        # Usado por la integración continua: confirma que la app arranca y se cierra sola
+        def _smoke():
+            # Audio sin internet: genera un tono Opus con ffmpeg y lo reproduce con salida muda
+            try:
+                import tempfile
+
+                tone = Path(tempfile.gettempdir()) / "puquichu_tono_prueba.opus"
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libopus", str(tone)],
+                    check=True, timeout=30,
+                )
+                inst = vlc.Instance("--no-xlib", "--aout=dummy")
+                local_player = inst.media_player_new()
+                local_player.set_media(inst.media_new(str(tone)))
+                local_player.play()
+                deadline = time.time() + 10
+                while time.time() < deadline and local_player.get_time() < 1000:
+                    time.sleep(0.1)
+                played = local_player.get_time()
+                local_player.stop()
+                print(f"PUQUICHU_AUDIO_LOCAL_{'OK' if played >= 1000 else 'FALLO'} {played} ms", flush=True)
+            except Exception as e:
+                print(f"PUQUICHU_AUDIO_LOCAL_FALLO {type(e).__name__}: {e}", flush=True)
+            if os.environ["PUQUICHU_SMOKE_TEST"] == "red":
+                try:
+                    import yt_dlp
+
+                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}) as ydl:
+                        hit = ydl.extract_info("ytsearch1:los kjarkas llorando se fue", download=False)["entries"][0]
+                    print(f"PUQUICHU_RED_OK {hit.get('title')}", flush=True)
+                    # Reproduce unos segundos (salida de audio muda) para comprobar códecs y streaming
+                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "format": "bestaudio[acodec=opus]/bestaudio"}) as ydl:
+                        stream = ydl.extract_info(hit["url"], download=False)["url"]
+                    inst = vlc.Instance("--no-xlib", "--aout=dummy")
+                    test_player = inst.media_player_new()
+                    test_player.set_media(inst.media_new(stream))
+                    test_player.play()
+                    deadline = time.time() + 15
+                    while time.time() < deadline and test_player.get_time() < 1500:
+                        time.sleep(0.2)
+                    played = test_player.get_time()
+                    test_player.stop()
+                    print(f"PUQUICHU_AUDIO_{'OK' if played >= 1500 else 'FALLO'} {played} ms", flush=True)
+                except Exception as e:  # YouTube puede bloquear servidores de centros de datos
+                    print(f"PUQUICHU_RED_FALLO {type(e).__name__}: {str(e)[:200]}", flush=True)
+            print(f"PUQUICHU_OK {APP_VERSION} yt-dlp {ytdlp_version()} mpris={'si' if window.mpris else 'no'}", flush=True)
+            window.close()
+            app.quit()
+
+        QTimer.singleShot(2500, _smoke)
     sys.exit(app.exec())
 
 

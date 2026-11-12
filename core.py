@@ -4,37 +4,117 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import urllib.parse
 import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-import yt_dlp
 from PyQt6.QtCore import QThread, pyqtSignal
 
 APP_NAME = "Puquichu"
 APP_ID = "puquichu"
+APP_VERSION = "1.1.0"
 
 # =====================================================================
-# CONFIGURACIÓN DEL SISTEMA Y BASE DE DATOS
+# RUTAS: modo "código fuente" (portable) o modo "instalado"
 # =====================================================================
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "settings.json"
-DB_PATH = BASE_DIR / "puquichu.db"
-_LEGACY_DB_PATH = BASE_DIR / "spotify_local.db"  # nombre anterior de la base de datos
-THUMB_DIR = BASE_DIR / "musicplay" / ".thumbnails"
+FROZEN = bool(getattr(sys, "frozen", False))  # True cuando corre desde el instalador
+SOURCE_DIR = Path(__file__).resolve().parent
+# Recursos de solo lectura (ícono, etc.): dentro del paquete instalado o junto al código
+APP_DIR = Path(getattr(sys, "_MEIPASS", SOURCE_DIR))
+ASSETS_DIR = APP_DIR / "assets"
+
+
+def _user_data_dir() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID
+
+
+def _user_music_dir() -> Path:
+    """Carpeta 'Música' del usuario (respeta el idioma del sistema en Linux: ~/Música)."""
+    if sys.platform.startswith("linux"):
+        try:
+            out = subprocess.run(["xdg-user-dir", "MUSIC"], capture_output=True, text=True, timeout=3).stdout.strip()
+            if out and Path(out) != Path.home():
+                return Path(out) / APP_NAME
+        except Exception:
+            pass
+    for name in ("Música", "Music"):
+        if (Path.home() / name).is_dir():
+            return Path.home() / name / APP_NAME
+    return Path.home() / "Music" / APP_NAME
+
+
+# Si ya hay datos junto al código (instalación de desarrollo), se siguen usando ahí.
+PORTABLE = not FROZEN and any(
+    (SOURCE_DIR / f).exists() for f in ("puquichu.db", "spotify_local.db", "settings.json")
+)
+DATA_DIR = SOURCE_DIR if PORTABLE else _user_data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_MUSIC_DIR = SOURCE_DIR / "musicplay" if PORTABLE else _user_music_dir()
+
+BASE_DIR = DATA_DIR  # compatibilidad con código anterior
+CONFIG_PATH = DATA_DIR / "settings.json"
+DB_PATH = DATA_DIR / "puquichu.db"
+_LEGACY_DB_PATH = DATA_DIR / "spotify_local.db"  # nombre anterior de la base de datos
+THUMB_DIR = (SOURCE_DIR / "musicplay" / ".thumbnails") if PORTABLE else (DATA_DIR / "thumbnails")
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 SEARCH_CACHE_DIR = Path(tempfile.gettempdir()) / "puquichu_search"
-ASSETS_DIR = BASE_DIR / "assets"
 
 # Migración del nombre de la base de datos sin perder datos
 if _LEGACY_DB_PATH.exists() and not DB_PATH.exists():
     shutil.move(str(_LEGACY_DB_PATH), str(DB_PATH))
 
+# =====================================================================
+# MOTOR DE DESCARGAS (yt-dlp) — se puede actualizar sin reinstalar la app
+# =====================================================================
+YTDLP_OVERRIDE = DATA_DIR / "yt-dlp-actualizado.zip"
+if YTDLP_OVERRIDE.exists():
+    sys.path.insert(0, str(YTDLP_OVERRIDE))
+try:
+    import yt_dlp
+except Exception:
+    # La copia actualizada estaba dañada: se descarta y se usa la incluida
+    if str(YTDLP_OVERRIDE) in sys.path:
+        sys.path.remove(str(YTDLP_OVERRIDE))
+    YTDLP_OVERRIDE.unlink(missing_ok=True)
+    for mod in [m for m in sys.modules if m == "yt_dlp" or m.startswith("yt_dlp.")]:
+        del sys.modules[mod]
+    import yt_dlp
+
+YTDLP_LATEST_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+
+
+def ytdlp_version() -> str:
+    return yt_dlp.version.__version__
+
+
+def download_latest_ytdlp() -> str:
+    """Descarga la última versión de yt-dlp (archivo zipapp) y devuelve su número de versión."""
+    tmp = YTDLP_OVERRIDE.with_suffix(".tmp")
+    req = urllib.request.Request(YTDLP_LATEST_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f)
+    with zipfile.ZipFile(tmp) as z:
+        text = z.read("yt_dlp/version.py").decode("utf-8", "replace")
+    match = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", text)
+    if not match:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("El archivo descargado no parece una versión válida de yt-dlp.")
+    tmp.replace(YTDLP_OVERRIDE)
+    return match.group(1)
+
+
 DEFAULT_SETTINGS = {
-    "download_dir": str(BASE_DIR / "musicplay"),
+    "download_dir": str(DEFAULT_MUSIC_DIR),
     "organize_by_genre": True,
     "clean_filenames": True,
     "audio_format": "best",  # "best" (Opus original) | "m4a" (AAC) | "mp3_320" (recodificado)

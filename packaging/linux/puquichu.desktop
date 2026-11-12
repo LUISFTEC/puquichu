@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Puquichu
+GenericName=Reproductor de música
+Comment=Busca, escucha al instante y guarda tu música
+Exec=puquichu
+Icon=puquichu
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Player;
+Keywords=musica;music;player;reproductor;huayno;cumbia;
+StartupWMClass=puquichu

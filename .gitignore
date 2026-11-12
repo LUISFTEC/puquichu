@@ -15,3 +15,10 @@ puquichu.db
 
 # Preferencias personales (la app las crea sola al arrancar)
 settings.json
+
+# Empaquetado
+build/
+build-venv/
+
+# Motor de descargas actualizado desde la app
+yt-dlp-actualizado.zip

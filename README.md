@@ -35,40 +35,44 @@ Hecho con **Python + PyQt6 + VLC + SQLite + yt-dlp**. Es una aplicación nativa 
 
 ---
 
-## 📦 Instalación
+## 📥 Instalar (fácil)
 
-Probado en **Ubuntu / Kubuntu (KDE Plasma, X11)** con Python 3.12+.
+### Linux — Ubuntu 22.04+, Linux Mint 21+, Pop!_OS, Debian 12, Kubuntu…
+
+1. Entra a **[Releases → última versión](https://github.com/LUISFTEC/-puquichu/releases/latest)**.
+2. Descarga el archivo **`puquichu_…_amd64.deb`** (en *Assets*).
+3. Haz **doble clic** en el archivo → se abre el Centro de software → **Instalar**.
+4. Busca **Puquichu** en tu menú de aplicaciones. 🌱
+
+Se instala solo lo necesario (VLC y ffmpeg). Tu música queda en `~/Música/Puquichu` y tu biblioteca en `~/.local/share/puquichu`.
+Para desinstalar: desde el Centro de software o con `sudo apt remove puquichu` (tu música no se borra).
+
+### Windows y macOS
+🚧 En preparación.
+
+---
+
+## 🛠️ Instalar desde el código (desarrolladores)
 
 ```bash
-# 1. Dependencias del sistema
 sudo apt install vlc ffmpeg libnotify-bin python3-venv
-
-# 2. Clonar y crear el entorno
-git clone <URL-del-repositorio> puquichu
+git clone https://github.com/LUISFTEC/-puquichu.git puquichu
 cd puquichu
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-
-# 3. Ejecutar
 venv/bin/python3 app.py
 ```
 
-### Acceso directo en el menú de aplicaciones (opcional)
-
-Crea `~/.local/share/applications/puquichu.desktop` (cambia `RUTA` por la carpeta donde clonaste el proyecto):
-
-```ini
-[Desktop Entry]
-Name=Puquichu
-Comment=Busca, escucha y guarda tu música
-Exec=RUTA/venv/bin/python3 RUTA/app.py
-Path=RUTA
-Icon=RUTA/assets/puquichu.png
-Terminal=false
-Type=Application
-Categories=AudioVideo;Audio;Player;
-StartupWMClass=puquichu
+### Armar el instalador .deb
+```bash
+python3 -m venv build-venv
+build-venv/bin/pip install -r requirements.txt pyinstaller
+PYTHON=build-venv/bin/python packaging/linux/build-deb.sh   # -> build/puquichu_<versión>_amd64.deb
 ```
+
+Al publicar una versión (`git tag v1.2.0 && git push origin v1.2.0`), GitHub Actions
+(`.github/workflows/instaladores.yml`) arma el `.deb` en Ubuntu 22.04, lo instala y lo prueba en
+Ubuntu 22.04 y 24.04 limpios, y lo publica en *Releases* con las notas de `packaging/notas-de-version.md`.
 
 ---
 
@@ -98,8 +102,10 @@ StartupWMClass=puquichu
 | `widgets.py` | Componentes dibujados a mano: barra de título, tarjetas, filas de resultados, tabla de biblioteca, diálogos, avisos, interruptores, barra deslizante. |
 | `mpris.py` | Integración MPRIS2 por D-Bus. |
 | `assets/` | Ícono de la aplicación. |
+| `packaging/` | Receta de PyInstaller, script del `.deb` y notas de versión. |
 
-Archivos que crea la app al usarla (no se suben a git): `settings.json` (preferencias), `puquichu.db` (biblioteca SQLite) y `musicplay/` (música guardada, en subcarpetas por género, y carátulas en `.thumbnails/`).
+Datos del usuario (no se suben a git): `settings.json` (preferencias), `puquichu.db` (biblioteca SQLite) y la música en subcarpetas por género.
+En la app instalada viven en `~/.local/share/puquichu/` y `~/Música/Puquichu/`; si ejecutas desde el código y ya existen junto a `app.py`, se usan ahí (modo portable).
 
 ### Base de datos (`songs`)
 `id`, `title`, `artist`, `genre`, `search_term`, `file_path`, `thumbnail_path`, `duration`, `play_count`, `last_played`, `favorite`, `source_id` (ID del video, evita duplicados), `added_at`.
