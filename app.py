@@ -2986,7 +2986,7 @@ def main():
             try:
                 import tempfile
 
-                tone = Path(tempfile.gettempdir()) / "puquichu_tono_prueba.opus"
+                tone = Path(tempfile.gettempdir()) / "puquichu_tono_prueba.webm"  # WebM/Opus, como YouTube
                 subprocess.run(
                     ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libopus", str(tone)],
                     check=True, timeout=30,

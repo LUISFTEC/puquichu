@@ -18,12 +18,21 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 APP_NAME = "Puquichu"
 APP_ID = "puquichu"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 # =====================================================================
 # RUTAS: modo "código fuente" (portable) o modo "instalado"
 # =====================================================================
 FROZEN = bool(getattr(sys, "frozen", False))  # True cuando corre desde el instalador
+
+if FROZEN and sys.platform.startswith("linux"):
+    # El paquete instalado agrega sus librerías a LD_LIBRARY_PATH. Los programas externos
+    # (ffmpeg, xdg-open, notify-send…) deben usar las del sistema, o fallan en distros más nuevas.
+    _orig_ld = os.environ.get("LD_LIBRARY_PATH_ORIG")
+    if _orig_ld:
+        os.environ["LD_LIBRARY_PATH"] = _orig_ld
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
 SOURCE_DIR = Path(__file__).resolve().parent
 # Recursos de solo lectura (ícono, etc.): dentro del paquete instalado o junto al código
 APP_DIR = Path(getattr(sys, "_MEIPASS", SOURCE_DIR))

@@ -39,7 +39,7 @@ Hecho con **Python + PyQt6 + VLC + SQLite + yt-dlp**. Es una aplicación nativa 
 
 ### Linux — Ubuntu 22.04+, Linux Mint 21+, Pop!_OS, Debian 12, Kubuntu…
 
-1. Entra a **[Releases → última versión](https://github.com/LUISFTEC/-puquichu/releases/latest)**.
+1. Entra a **[Releases → última versión](https://github.com/LUISFTEC/puquichu/releases/latest)**.
 2. Descarga el archivo **`puquichu_…_amd64.deb`** (en *Assets*).
 3. Haz **doble clic** en el archivo → se abre el Centro de software → **Instalar**.
 4. Busca **Puquichu** en tu menú de aplicaciones. 🌱
@@ -56,7 +56,7 @@ Para desinstalar: desde el Centro de software o con `sudo apt remove puquichu` (
 
 ```bash
 sudo apt install vlc ffmpeg libnotify-bin python3-venv
-git clone https://github.com/LUISFTEC/-puquichu.git puquichu
+git clone https://github.com/LUISFTEC/puquichu.git puquichu
 cd puquichu
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt

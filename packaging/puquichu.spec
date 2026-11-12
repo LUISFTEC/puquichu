@@ -19,6 +19,11 @@ a = Analysis(  # noqa: F821
 # dentro del paquete no encuentra sus módulos y no puede reproducir nada.
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith(("libvlc", "libvlccore"))]
 
+# La librería de C++ (y la de soporte de GCC) se toman siempre del sistema: el paquete se arma en
+# Ubuntu 22.04 y en sistemas más nuevos los módulos de VLC (p. ej. el lector de WebM/Opus de YouTube)
+# necesitan la versión más reciente. La del sistema nunca es más vieja que la de 22.04.
+a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith(("libstdc++.so", "libgcc_s.so"))]
+
 pyz = PYZ(a.pure)  # noqa: F821
 
 exe = EXE(  # noqa: F821

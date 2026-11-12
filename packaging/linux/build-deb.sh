@@ -37,7 +37,7 @@ Maintainer: LUISFTEC <74120641+LUISFTEC@users.noreply.github.com>
 Installed-Size: ${INSTALLED_KB}
 Depends: vlc, ffmpeg, libxcb-cursor0, libxkbcommon-x11-0, libegl1, libfontconfig1, libdbus-1-3
 Recommends: libnotify-bin, xdg-user-dirs
-Homepage: https://github.com/LUISFTEC/-puquichu
+Homepage: https://github.com/LUISFTEC/puquichu
 Description: Reproductor de música de escritorio con los colores de la sierra
  Busca una canción, suena al instante y queda guardada en tu equipo para
  escucharla sin internet, en la mejor calidad disponible. Incluye Top Perú,
