@@ -149,8 +149,8 @@ Cada usuario es responsable de respetar los derechos de autor y los términos de
 
 ---
 
-## 🙌 Créditos
+## 🙏 Agradecimientos
 
-Creado por **[LUISFTEC](https://github.com/LUISFTEC)**, con ayuda de **Claude** (asistente de inteligencia artificial de Anthropic) en el diseño y la programación.
+Creado por **[LUISFTEC](https://github.com/LUISFTEC)**. Gracias a **Claude** (asistente de inteligencia artificial de Anthropic) por la ayuda en el diseño y la programación.
 
 Construido sobre [PyQt6](https://www.riverbankcomputing.com/software/pyqt/), [VLC / python-vlc](https://www.videolan.org/), [yt-dlp](https://github.com/yt-dlp/yt-dlp) y la API pública de [Deezer](https://developers.deezer.com/).

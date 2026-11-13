@@ -30,3 +30,4 @@ Tu música se guarda en **~/Música/Puquichu** y tu biblioteca en **~/.local/sha
 - Arreglado: un doble clic ya no hace que la canción arranque dos veces.
 - El motor de descargas se puede **actualizar desde Ajustes** sin reinstalar.
 - Instalador probado en Ubuntu 22.04 y 24.04 (audio local y en línea en formato WebM/Opus).
+- 1.1.2: el instalador usa Python 3.12, para que el motor de descargas se siga pudiendo actualizar.

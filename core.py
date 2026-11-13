@@ -18,7 +18,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 APP_NAME = "Puquichu"
 APP_ID = "puquichu"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 
 # =====================================================================
 # RUTAS: modo "código fuente" (portable) o modo "instalado"

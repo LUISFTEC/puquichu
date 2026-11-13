@@ -6,7 +6,7 @@ Lee `README.md` en esta misma carpeta antes de realizar cualquier cambio (secci�
 - **Nombre:** Puquichu. Nombre inventado: *puquy* (lluvias, pasto verde) + *ichu* (pasto seco dorado).
 - **Tipo:** aplicación nativa de escritorio (PyQt6 + python-vlc + SQLite + yt-dlp + ffmpeg). **NO es web.** Hoy publicada para Linux.
 - **Entrada:** `app.py` (ventana) → usa `core.py` (lógica), `theme.py` (diseño), `widgets.py` (componentes), `mpris.py` (D-Bus, solo Linux).
-- **Python:** `venv/bin/python3` dentro de la carpeta del proyecto. El código debe seguir siendo compatible con **Python 3.10**.
+- **Python:** `venv/bin/python3` dentro de la carpeta del proyecto. El instalador se arma con **Python 3.12** (yt-dlp abandona 3.10); mantener el código compatible con 3.10 por si acaso.
 - **Datos:** desde el código y con datos junto a `app.py` → modo portable (carpeta del proyecto). Instalada → `~/.local/share/puquichu` y `~/Música/Puquichu`.
 - **Repositorio:** https://github.com/LUISFTEC/puquichu (público, GPL-3.0). Rama `main`, etiquetas `vX.Y.Z`.
 
@@ -26,7 +26,7 @@ venv/bin/python3 app.py
   - No incluir `libvlc*` en el paquete (pierde sus módulos): se usa el VLC del sistema.
   - No incluir `libstdc++` ni `libgcc_s`: en distros más nuevas rompen el lector WebM de VLC y ffmpeg.
   - Los programas externos (ffmpeg, xdg-open…) deben correr sin el `LD_LIBRARY_PATH` del paquete (ya lo hace `core.py`).
-  - Nada de f-strings con comillas iguales anidadas (requiere Python 3.12; el paquete usa 3.10).
+  - Nada de f-strings con comillas iguales anidadas (requieren Python 3.12+; el código debe seguir corriendo en 3.10).
 
 ## Hoja de ruta (acordada con el autor, noviembre 2026)
 

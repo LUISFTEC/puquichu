@@ -22,11 +22,16 @@ jobs:
       - name: Dependencias para construir
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-venv vlc ffmpeg libxcb-cursor0 libxkbcommon-x11-0 libegl1
+          sudo apt-get install -y vlc ffmpeg libxcb-cursor0 libxkbcommon-x11-0 libegl1
+
+      # Python 3.12 compilado para Ubuntu 22.04 (yt-dlp dejará de soportar Python 3.10)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Entorno de Python
         run: |
-          python3 -m venv build-venv
+          python -m venv build-venv
           build-venv/bin/pip install --upgrade pip
           build-venv/bin/pip install -r requirements.txt pyinstaller
 
