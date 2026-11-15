@@ -17,7 +17,7 @@ venv/bin/python3 app.py
 
 ---
 
-## Estado actual (versión 1.2.0)
+## Estado actual (versión 1.2.2)
 
 - ✅ **Linux (.deb)** publicado en Releases. GitHub Actions (`.github/workflows/instaladores.yml`) lo arma en Ubuntu 22.04,
   lo instala y lo prueba en Ubuntu 22.04 y 24.04 limpios, y lo publica al subir una etiqueta `v*`.
@@ -25,6 +25,8 @@ venv/bin/python3 app.py
 - Lecciones del empaquetado (no repetir errores):
   - **Desde la 1.2 no se usa VLC**: VLC 3 corrige la sincronía audio/video y con Bluetooth descartaba audio y metía ~0,8 s
     de silencio al empezar/adelantar (medido grabando el monitor del parlante). `player.py` usa QtMultimedia (FFmpeg incluido en PyQt6).
+  - En Linux se fuerza `QT_AUDIO_BACKEND=pulseaudio`: el backend experimental PipeWire de Qt 6.10 marca el flujo con
+    `node.dont-reconnect=true` e impide cambiar de parlante desde el mezclador del sistema (`MOVE_SINK_INPUT`).
   - No incluir `libpulse*` en el paquete: el cliente de sonido se toma del sistema (dependencia `libpulse0`).
   - Armar el paquete con un Python que use el OpenSSL del sistema (no Miniconda): si no, choca con el `libcrypto` del sistema.
   - No cargar otra canción dentro de la señal EndOfMedia de QMediaPlayer (se bloquea): `player.py` la emite diferida.

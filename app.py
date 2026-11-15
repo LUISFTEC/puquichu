@@ -13,6 +13,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_AUDIO_BACKEND", "pulseaudio")
+
 from PyQt6.QtCore import QPoint, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PyQt6.QtMultimedia import QMediaDevices
@@ -2581,6 +2584,7 @@ class PuquichuApp(QMainWindow):
 
     def show_output_menu(self):
         """Elegir en qué parlante suena Puquichu (se recuerda para la próxima vez)."""
+        self.player.sync_external_move()
         menu = QMenu(self)
         title = menu.addAction("Salida de audio")
         title.setEnabled(False)

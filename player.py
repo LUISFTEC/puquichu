@@ -7,6 +7,15 @@ de solo audio no necesita esa corrección; QtMultimedia reproduce limpio.
 La interfaz imita la de python-vlc (play, pause, get_time, audio_set_volume…)
 para que el resto de la app cambie lo mínimo.
 """
+import os
+import subprocess
+import sys
+
+if sys.platform.startswith("linux"):
+    # El backend experimental PipeWire de Qt 6.10 marca el stream con node.dont-reconnect=true,
+    # lo que impide mover la app de parlante desde el mezclador del sistema (KDE/GNOME).
+    os.environ.setdefault("QT_AUDIO_BACKEND", "pulseaudio")
+
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudio, QAudioOutput, QMediaDevices, QMediaPlayer
 
@@ -33,6 +42,7 @@ class AudioEngine(QObject):
     # ------------------------------------------------------------------ carga
     def load(self, source: str, start_ms: int = 0, autoplay: bool = True):
         """Carga un archivo local o una URL. Empieza directo en start_ms (sin sonar antes desde 0)."""
+        self.sync_external_move()
         url = QUrl(source) if source.startswith(("http://", "https://")) else QUrl.fromLocalFile(source)
         self._pending_start = max(0, int(start_ms))
         self._autoplay = autoplay
@@ -94,6 +104,45 @@ class AudioEngine(QObject):
         target = self._pick_device()
         if not target.isNull() and target.id() != self._output.device().id():
             self._output.setDevice(target)
+
+    def sync_external_move(self):
+        """Si el usuario movió Puquichu de parlante desde el mezclador del sistema, respetarlo."""
+        if not sys.platform.startswith("linux") or not self.has_media():
+            return
+        sink = self._current_pulse_sink()
+        if not sink or sink == self.device_id(self._output.device()):
+            return
+        for dev in QMediaDevices.audioOutputs():
+            if self.device_id(dev) == sink:
+                self._output.setDevice(dev)
+                if self._preferred:
+                    self._preferred = sink
+                break
+
+    @staticmethod
+    def _current_pulse_sink() -> str:
+        env = {**os.environ, "LC_ALL": "C"}
+        try:
+            si = subprocess.check_output(["pactl", "list", "sink-inputs"], env=env, text=True, timeout=0.4)
+            pid_line = f'application.process.id = "{os.getpid()}"'
+            sink_idx = None
+            for block in si.split("Sink Input #")[1:]:
+                if pid_line in block:
+                    for line in block.splitlines():
+                        line = line.strip()
+                        if line.startswith("Sink:"):
+                            sink_idx = line.split(":", 1)[1].strip()
+                            break
+            if not sink_idx:
+                return ""
+            sinks = subprocess.check_output(["pactl", "list", "sinks", "short"], env=env, text=True, timeout=0.4)
+            for line in sinks.splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[0].strip() == sink_idx:
+                    return parts[1].strip()
+        except Exception:
+            pass
+        return ""
 
     # ---------------------------------------------------- interfaz tipo VLC
     def play(self):
