@@ -30,7 +30,8 @@ Hecho con **Python + PyQt6 (QtMultimedia) + SQLite + yt-dlp**. Es una aplicació
 **Escritorio**
 - Tema por estación: **Puquy** (verde), **Ichu** (dorado) o automático según el mes.
 - Integración **MPRIS**: control desde el panel de KDE/GNOME y teclas multimedia.
-- Audio limpio también con parlantes **Bluetooth**, temporizador para dormir, notificaciones y atajos de teclado.
+- Audio limpio también con parlantes **Bluetooth** y **selector de salida de audio** (recuerda tu parlante).
+- Temporizador para dormir, notificaciones y atajos de teclado.
 - Retoma la última canción donde la dejaste.
 
 ---

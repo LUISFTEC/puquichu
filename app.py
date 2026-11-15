@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -178,7 +179,7 @@ class PuquichuApp(QMainWindow):
 
         # Motor de audio VLC nativo
         # Motor de audio (QtMultimedia): limpio también con parlantes Bluetooth
-        self.player = AudioEngine(self)
+        self.player = AudioEngine(self, preferred_device=self.settings.get("audio_device", ""))
         self.player.audio_set_volume(int(self.settings.get("default_volume", 85)))
         self.player.ended.connect(self._on_track_ended)
         self.player.failed.connect(self._on_player_failed)
@@ -1062,9 +1063,11 @@ class PuquichuApp(QMainWindow):
         rr.setContentsMargins(0, 0, 0, 0)
         rr.setSpacing(6)
         rr.addStretch()
+        self.btn_output = self._player_btn("speaker", "Salida de audio", self.show_output_menu)
         self.btn_queue = self._player_btn("queue", "A continuación", self.show_queue_menu)
         self.btn_sleep = self._player_btn("moon", "Temporizador para dormir", self.show_sleep_menu)
         self.btn_mute = self._player_btn("volume", "Silenciar (Ctrl+M)", self.toggle_mute)
+        rr.addWidget(self.btn_output)
         rr.addWidget(self.btn_queue)
         rr.addWidget(self.btn_sleep)
         rr.addWidget(self.btn_mute)
@@ -1116,6 +1119,9 @@ class PuquichuApp(QMainWindow):
         self.lib_shuffle_btn.setIcon(make_icon("shuffle", accent if self.shuffle_enabled else muted, 22))
         self.lib_play_btn.setIcon(make_icon("play", C["on_accent"], 20))
         self.btn_queue.setIcon(make_icon("queue", accent if self.up_next else muted, 20))
+        chosen = bool(self.settings.get("audio_device"))
+        self.btn_output.setIcon(make_icon("speaker", accent if chosen else muted, 20))
+        self.btn_output.setToolTip(f"Salida de audio: {self.player.current_device().description()}")
         self.btn_queue.setToolTip(f"A continuación ({len(self.up_next)})" if self.up_next else "A continuación")
         sleeping = self.sleep_deadline is not None or self.sleep_end_of_track
         self.btn_sleep.setIcon(make_icon("moon", accent if sleeping else muted, 20))
@@ -2572,6 +2578,37 @@ class PuquichuApp(QMainWindow):
     def _popup_above(menu: QMenu, anchor: QWidget):
         size = menu.sizeHint()
         menu.exec(anchor.mapToGlobal(QPoint(anchor.width() // 2 - size.width() // 2, -size.height() - 8)))
+
+    def show_output_menu(self):
+        """Elegir en qué parlante suena Puquichu (se recuerda para la próxima vez)."""
+        menu = QMenu(self)
+        title = menu.addAction("Salida de audio")
+        title.setEnabled(False)
+        menu.addSeparator()
+        preferred = self.player.preferred_device()
+        current = self.player.current_device().description()
+        system = menu.addAction(make_icon("settings", C["muted"], 14), f"Salida del sistema  ·  {QMediaDevices.defaultAudioOutput().description()}")
+        system.setCheckable(True)
+        system.setChecked(not preferred)
+        system.triggered.connect(lambda: self.set_audio_output(""))
+        menu.addSeparator()
+        for dev in self.player.output_devices():
+            dev_id = AudioEngine.device_id(dev)
+            act = menu.addAction(make_icon("speaker", C["muted"], 14), dev.description().replace("&", "&&"))
+            act.setCheckable(True)
+            act.setChecked(dev_id == preferred)
+            act.triggered.connect(lambda _c=False, i=dev_id, n=dev.description(): self.set_audio_output(i, n))
+        if preferred and not self.player.preferred_available():
+            menu.addSeparator()
+            menu.addAction(f"El parlante elegido no está conectado; suena en: {current}").setEnabled(False)
+        self._popup_above(menu, self.btn_output)
+
+    def set_audio_output(self, device_id: str, name: str = ""):
+        self.settings["audio_device"] = device_id
+        save_settings(self.settings)
+        self.player.set_preferred_device(device_id)
+        self._refresh_visual_state()
+        self.toast.show_message(f"Sonando en: {name}" if device_id else "Sonando en la salida del sistema")
 
     def show_sleep_menu(self):
         menu = QMenu(self)

@@ -24,6 +24,10 @@ Tu música se guarda en **~/Música/Puquichu** y tu biblioteca en **~/.local/sha
 
 ## ✨ Novedades de la 1.2
 
+- 🔈 **1.2.1 — Selector de salida de audio** (botón de parlante en el reproductor): elige en qué parlante suena
+  (laptop, Bluetooth…) y Puquichu lo recuerda. Si el parlante se desconecta, usa la salida del sistema y vuelve
+  solo cuando se reconecta. *Si con la 1.2.0 no escuchabas nada, era porque sonaba en otra salida.*
+
 - 🔊 **Nuevo motor de audio**: se acabó la pausa y el "trabado" al empezar o al adelantar, sobre todo con parlantes **Bluetooth**.
   Además empieza a sonar más rápido (≈0,3 s en canciones en línea).
 - ▶️ **Reproducción continua arreglada**: sigue en orden la lista donde elegiste la canción (biblioteca, Escuchado recientemente,

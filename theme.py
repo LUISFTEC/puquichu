@@ -437,6 +437,13 @@ def draw_icon(p: QPainter, name: str, color: QColor):
         path.cubicTo(21.5, 12, 21.5, 18.5, 17.5, 18.5)
         path.closeSubpath()
         p.drawPath(path)
+    elif name == "speaker":
+        p.drawRoundedRect(QRectF(6, 2.5, 12, 19), 2.5, 2.5)
+        p.drawEllipse(QRectF(8.5, 10, 7, 7))
+        p.save()
+        p.setBrush(color)
+        p.drawEllipse(QRectF(11, 5, 2, 2))
+        p.restore()
     elif name == "win_min":
         poly((6.5, 12.5), (17.5, 12.5))
     elif name == "win_max":

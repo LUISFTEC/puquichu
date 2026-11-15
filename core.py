@@ -18,7 +18,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 APP_NAME = "Puquichu"
 APP_ID = "puquichu"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 # =====================================================================
 # RUTAS: modo "código fuente" (portable) o modo "instalado"
@@ -139,6 +139,7 @@ DEFAULT_SETTINGS = {
     "clean_filenames": True,
     "audio_format": "best",  # "best" (Opus original) | "m4a" (AAC) | "mp3_320" (recodificado)
     "listen_mode": "save",   # "save" = escuchar y guardar a la vez | "stream" = solo en línea
+    "audio_device": "",      # "" = salida del sistema, o el ID del parlante elegido en Puquichu
     "auto_next": True,
     "default_volume": 85,
     "season_theme": "auto",      # "auto" | "puquy" (lluvias, verde) | "ichu" (seca, dorado)

@@ -15,10 +15,11 @@ class AudioEngine(QObject):
     ended = pyqtSignal()         # la canción terminó sola
     failed = pyqtSignal(str)     # no se pudo abrir o reproducir
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, preferred_device: str = ""):
         super().__init__(parent)
         self._devices = QMediaDevices(self)
-        self._output = QAudioOutput(QMediaDevices.defaultAudioOutput(), self)
+        self._preferred = preferred_device  # "" = seguir la salida del sistema
+        self._output = QAudioOutput(self._pick_device(), self)
         self._player = QMediaPlayer(self)
         self._player.setAudioOutput(self._output)
         self._pending_start = 0
@@ -58,10 +59,41 @@ class AudioEngine(QObject):
         if message:
             QTimer.singleShot(0, lambda: self.failed.emit(message))
 
+    # ---------------------------------------------------- salida de audio
+    @staticmethod
+    def device_id(device) -> str:
+        return bytes(device.id()).decode("utf-8", "replace")
+
+    @staticmethod
+    def output_devices() -> list:
+        return list(QMediaDevices.audioOutputs())
+
+    def _pick_device(self):
+        """El parlante elegido si está conectado; si no, la salida del sistema."""
+        if self._preferred:
+            for dev in QMediaDevices.audioOutputs():
+                if self.device_id(dev) == self._preferred:
+                    return dev
+        return QMediaDevices.defaultAudioOutput()
+
+    def set_preferred_device(self, device_id: str):
+        self._preferred = device_id
+        self._follow_default_output()
+
+    def preferred_device(self) -> str:
+        return self._preferred
+
+    def current_device(self):
+        return self._output.device()
+
+    def preferred_available(self) -> bool:
+        return not self._preferred or any(self.device_id(d) == self._preferred for d in QMediaDevices.audioOutputs())
+
     def _follow_default_output(self):
-        default = QMediaDevices.defaultAudioOutput()
-        if not default.isNull() and default.id() != self._output.device().id():
-            self._output.setDevice(default)
+        """Al conectar/desconectar parlantes o cambiar la salida del sistema, se ajusta solo."""
+        target = self._pick_device()
+        if not target.isNull() and target.id() != self._output.device().id():
+            self._output.setDevice(target)
 
     # ---------------------------------------------------- interfaz tipo VLC
     def play(self):
