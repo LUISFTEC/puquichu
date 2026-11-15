@@ -1,8 +1,11 @@
 """Puquichu — widgets personalizados dibujados a mano."""
-from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
+import html
+
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -53,6 +56,40 @@ def ui_font(px: int, weight=QFont.Weight.Normal) -> QFont:
 
 def elide(text: str, font: QFont, width: int) -> str:
     return QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, max(0, int(width)))
+
+
+# =====================================================================
+# SEGURIDAD: textos que vienen de internet siempre como texto plano
+# =====================================================================
+class PlainToolTips(QObject):
+    """Muestra todos los tooltips como texto plano.
+
+    Qt interpreta un tooltip como HTML si "parece" HTML; un título de YouTube armado a propósito
+    podría así mostrar imágenes del disco o desordenar la interfaz. Aquí se escapan siempre.
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.ToolTip:
+            return False
+        tip = ""
+        if isinstance(obj, QWidget):
+            view = obj.parent() if isinstance(obj.parent(), QAbstractItemView) else None
+            if view is not None and obj is view.viewport():
+                index = view.indexAt(event.pos())
+                tip = index.data(Qt.ItemDataRole.ToolTipRole) if index.isValid() else ""
+            else:
+                tip = obj.toolTip()
+        if not tip:
+            QToolTip.hideText()
+            return True
+        safe = "<qt>" + html.escape(str(tip)).replace("\n", "<br>") + "</qt>"
+        QToolTip.showText(event.globalPos(), safe, obj if isinstance(obj, QWidget) else None)
+        return True
+
+
+def plain(label: QLabel) -> QLabel:
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    return label
 
 
 # =====================================================================
@@ -130,7 +167,7 @@ class TitleBar(QWidget):
         self.logo.setPixmap(brand_logo(18))
         lay.addWidget(self.logo)
         lay.addSpacing(6)
-        self.title = QLabel(APP_NAME)
+        self.title = plain(QLabel(APP_NAME))
         self.title.setObjectName("TitleText")
         lay.addWidget(self.title)
         lay.addStretch()
@@ -188,6 +225,7 @@ class ElidedLabel(QLabel):
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setMinimumWidth(20)
         self.setToolTip(text)
@@ -262,6 +300,7 @@ class Toast(QLabel):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hide()
         self._timer = QTimer(self)
@@ -305,7 +344,7 @@ class PuquiDialog(QDialog):
             ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
             ic.setPixmap(make_icon_pixmap(icon_name, icon_color or C["accent_hi"], 20))
             head.addWidget(ic)
-        t = QLabel(title)
+        t = plain(QLabel(title))
         t.setObjectName("H2")
         head.addWidget(t, stretch=1)
         outer.addLayout(head)
@@ -319,7 +358,7 @@ class PuquiDialog(QDialog):
         outer.addLayout(self.buttons)
 
     def add_text(self, text: str):
-        lbl = QLabel(text)
+        lbl = plain(QLabel(text))
         lbl.setObjectName("Muted")
         lbl.setWordWrap(True)
         lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

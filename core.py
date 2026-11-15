@@ -1,4 +1,5 @@
 """Puquichu — núcleo: configuración, base de datos, géneros y descargas (sin interfaz)."""
+import contextlib
 import json
 import os
 import re
@@ -6,7 +7,6 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -18,7 +18,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 APP_NAME = "Puquichu"
 APP_ID = "puquichu"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 
 # =====================================================================
 # RUTAS: modo "código fuente" (portable) o modo "instalado"
@@ -76,7 +76,18 @@ DB_PATH = DATA_DIR / "puquichu.db"
 _LEGACY_DB_PATH = DATA_DIR / "spotify_local.db"  # nombre anterior de la base de datos
 THUMB_DIR = (SOURCE_DIR / "musicplay" / ".thumbnails") if PORTABLE else (DATA_DIR / "thumbnails")
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
-SEARCH_CACHE_DIR = Path(tempfile.gettempdir()) / "puquichu_search"
+def _user_cache_dir() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_NAME / "cache"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / APP_NAME
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP_ID
+
+
+# Caché privada del usuario (no /tmp, que es compartido con otros usuarios del equipo)
+CACHE_DIR = _user_cache_dir()
+CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+SEARCH_CACHE_DIR = CACHE_DIR / "busquedas"
 
 # Migración del nombre de la base de datos sin perder datos
 if _LEGACY_DB_PATH.exists() and not DB_PATH.exists():
@@ -266,6 +277,32 @@ def detect_genre(title: str, artist: str = "", tags: list | None = None, categor
     return "Otros"
 
 
+def safe_id(value) -> str:
+    """Solo letras, números, guion y guion bajo: para usar IDs de internet como nombre de archivo."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(value or ""))[:80] or "sin_id"
+
+
+def download_file(url: str, dest: Path, timeout: int = 15, max_bytes: int = 15 * 1024 * 1024) -> bool:
+    """Descarga con límite de tiempo y de tamaño; escribe a un temporal y luego lo mueve (nunca deja archivos a medias)."""
+    if not url.startswith("https://"):
+        return False
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as f:
+            total = 0
+            while chunk := r.read(64 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("archivo demasiado grande")
+                f.write(chunk)
+        tmp.replace(dest)
+        return True
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        return False
+
+
 def genre_folder(genre: str) -> str:
     """Nombre de carpeta seguro: 'Urbano / Trap' -> 'Urbano - Trap' (la '/' creaba carpetas anidadas)."""
     return sanitize_filename((genre or "Otros").replace("/", "-"))
@@ -291,10 +328,47 @@ def sanitize_filename(name: str) -> str:
 # =====================================================================
 # GESTIÓN DE BASE DE DATOS Y ORGANIZACIÓN DE ARCHIVOS
 # =====================================================================
+_WAL_READY = False
+
+
+@contextlib.contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Conexión a la base de datos: confirma los cambios al terminar y siempre se cierra.
+
+    timeout=15 espera si otro hilo (p. ej. una descarga) está escribiendo, en vez de fallar con
+    "database is locked"; el modo WAL permite leer mientras se escribe.
+    """
+    global _WAL_READY
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    return conn
+    if not _WAL_READY:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            _WAL_READY = True
+        except sqlite3.DatabaseError:
+            pass
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def clean_interrupted_downloads(settings: dict, max_age_hours: int = 6):
+    """Borra restos de descargas interrumpidas (p. ej. si se cerró la app a mitad de una descarga)."""
+    tmp = Path(settings.get("download_dir", "")) / ".tmp"
+    if not tmp.is_dir():
+        return
+    limit = datetime.now().timestamp() - max_age_hours * 3600
+    for f in tmp.iterdir():
+        try:
+            if f.is_file() and f.stat().st_mtime < limit:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def init_and_migrate_db():
@@ -516,6 +590,7 @@ class SearchDownloadWorker(QThread):
                 "quiet": True,
                 "no_warnings": True,
                 "noprogress": True,
+                "socket_timeout": 20,
                 "progress_hooks": [self._progress_hook],
             }
 
@@ -580,9 +655,8 @@ class SearchDownloadWorker(QThread):
                 thumb_local = ""
                 if thumb_url:
                     try:
-                        thumb_dest = THUMB_DIR / f"{vid_id}.jpg"
-                        urllib.request.urlretrieve(thumb_url, str(thumb_dest))
-                        if thumb_dest.exists():
+                        thumb_dest = THUMB_DIR / f"{safe_id(vid_id)}.jpg"
+                        if download_file(thumb_url, thumb_dest):
                             thumb_local = str(thumb_dest)
                     except Exception:
                         thumb_local = ""
@@ -657,12 +731,10 @@ def search_local_songs(query: str, limit: int = 4) -> list[dict]:
 
 def _fetch_search_thumb(video_id: str) -> str:
     SEARCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    dest = SEARCH_CACHE_DIR / f"{video_id}.jpg"
-    if not dest.exists():
-        try:
-            urllib.request.urlretrieve(f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg", str(dest))
-        except Exception:
-            return ""
+    vid = safe_id(video_id)
+    dest = SEARCH_CACHE_DIR / f"{vid}.jpg"
+    if not dest.exists() and not download_file(f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", dest):
+        return ""
     return str(dest)
 
 
@@ -680,7 +752,7 @@ class YouTubeSearchWorker(QThread):
     def run(self):
         local = search_local_songs(self.query)
         try:
-            opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "skip_download": True}
+            opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "skip_download": True, "socket_timeout": 20}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(f"ytsearch{self.max_results}:{self.query}", download=False)
             entries = [e for e in (info or {}).get("entries") or [] if e and e.get("id")]
@@ -761,7 +833,7 @@ class OnlinePlayWorker(QThread):
     def run(self):
         try:
             item = self.item
-            base = {"quiet": True, "no_warnings": True, "noplaylist": True}
+            base = {"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20}
             if not item.get("id"):
                 query = item["query"]
                 with yt_dlp.YoutubeDL({**base, "extract_flat": "in_playlist"}) as ydl:
@@ -807,12 +879,9 @@ def _fetch_cover(url: str, key: str) -> str:
     if not url:
         return ""
     SEARCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    dest = SEARCH_CACHE_DIR / f"dz_{key}.jpg"
-    if not dest.exists():
-        try:
-            urllib.request.urlretrieve(url, str(dest))
-        except Exception:
-            return ""
+    dest = SEARCH_CACHE_DIR / f"dz_{safe_id(key)}.jpg"
+    if not dest.exists() and not download_file(url, dest):
+        return ""
     return str(dest)
 
 
@@ -884,7 +953,7 @@ def fetch_deezer_artist_top(artist: str, limit: int = 15) -> list[dict]:
     if not artist or _norm_name(artist) in ("artista desconocido", "youtube", "youtube music"):
         return []
     SEARCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache = SEARCH_CACHE_DIR / f"artist_{re.sub(r'[^a-z0-9]+', '_', _norm_name(artist))}.json"
+    cache = SEARCH_CACHE_DIR / f"artist_{safe_id(re.sub(r'[^a-z0-9]+', '_', _norm_name(artist)))}.json"
     if cache.exists() and (datetime.now().timestamp() - cache.stat().st_mtime) < 24 * 3600:
         try:
             return json.loads(cache.read_text(encoding="utf-8"))

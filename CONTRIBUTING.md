@@ -8,7 +8,7 @@
 
 ## Preparar el entorno
 ```bash
-sudo apt install vlc ffmpeg libnotify-bin python3-venv
+sudo apt install ffmpeg libnotify-bin python3-venv
 git clone <URL-de-tu-fork> puquichu && cd puquichu
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt

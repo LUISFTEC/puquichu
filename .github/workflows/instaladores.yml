@@ -22,7 +22,7 @@ jobs:
       - name: Dependencias para construir
         run: |
           sudo apt-get update
-          sudo apt-get install -y vlc ffmpeg libxcb-cursor0 libxkbcommon-x11-0 libegl1
+          sudo apt-get install -y ffmpeg libpulse0 libxcb-cursor0 libxkbcommon-x11-0 libegl1
 
       # Python 3.12 compilado para Ubuntu 22.04 (yt-dlp dejará de soportar Python 3.10)
       - uses: actions/setup-python@v5
@@ -57,12 +57,19 @@ jobs:
         with:
           name: puquichu-deb
 
-      - name: Instalar como lo haría un usuario (apt resuelve VLC, ffmpeg, etc.)
+      - name: Instalar como lo haría un usuario (apt resuelve ffmpeg, libpulse, etc.)
         run: |
           sudo apt-get update
           sudo apt-get install -y ./puquichu_*_amd64.deb
           test -x /usr/bin/puquichu
           test -f /usr/share/applications/puquichu.desktop
+
+      - name: Servidor de sonido virtual (los servidores de GitHub no tienen tarjeta de sonido)
+        run: |
+          sudo apt-get install -y pulseaudio
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=virtual >/dev/null
+          pactl set-default-sink virtual
 
       - name: Arrancar la app y reproducir audio
         run: |

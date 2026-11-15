@@ -6,7 +6,6 @@ La paleta nace del campo de la sierra:
 """
 import os
 import re
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +23,7 @@ from PyQt6.QtGui import (
     QRadialGradient,
 )
 
-from core import GENRE_COLORS
+from core import CACHE_DIR, GENRE_COLORS
 
 UI_FONT = "Ubuntu Sans"
 
@@ -610,7 +609,7 @@ def dominant_color(thumb_path: str, genre: str) -> QColor:
 
 def _ui_asset(name: str, icon_name: str, color: str, size: int = 16) -> str:
     """PNG temporal para la hoja de estilos (flechas de los combos)."""
-    folder = Path(tempfile.gettempdir()) / "puquichu_ui"
+    folder = CACHE_DIR / "ui"
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"{name}.png"
     pm = make_icon_pixmap(icon_name, color, size)

@@ -4,7 +4,7 @@
 
 1. Descarga el archivo **`puquichu_…_amd64.deb`** que está más abajo, en *Assets*.
 2. Haz **doble clic** en el archivo descargado: se abre el Centro de software.
-3. Pulsa **Instalar** y escribe tu contraseña. Se instala solo lo necesario (VLC y ffmpeg).
+3. Pulsa **Instalar** y escribe tu contraseña. Se instala solo lo necesario (ffmpeg).
 4. Busca **Puquichu** en tu menú de aplicaciones. ¡Listo! 🌱
 
 <details>
@@ -22,12 +22,15 @@ Tu música se guarda en **~/Música/Puquichu** y tu biblioteca en **~/.local/sha
 
 ---
 
-## ✨ Novedades de la 1.1
+## ✨ Novedades de la 1.2
 
-- **Primer instalador para Linux** (.deb): ya no hace falta saber de Python ni de terminal.
-- Página de cada canción con el **top real del artista**.
-- La barra de progreso **salta a donde haces clic** y muestra el minuto.
-- Arreglado: un doble clic ya no hace que la canción arranque dos veces.
-- El motor de descargas se puede **actualizar desde Ajustes** sin reinstalar.
-- Instalador probado en Ubuntu 22.04 y 24.04 (audio local y en línea en formato WebM/Opus).
-- 1.1.2: el instalador usa Python 3.12, para que el motor de descargas se siga pudiendo actualizar.
+- 🔊 **Nuevo motor de audio**: se acabó la pausa y el "trabado" al empezar o al adelantar, sobre todo con parlantes **Bluetooth**.
+  Además empieza a sonar más rápido (≈0,3 s en canciones en línea).
+- ▶️ **Reproducción continua arreglada**: sigue en orden la lista donde elegiste la canción (biblioteca, Escuchado recientemente,
+  Top Perú, búsqueda, top del artista…) y ya no salta ni repite canciones al reordenarse la biblioteca.
+- Si una canción falla durante la reproducción continua, pasa a la siguiente en vez de detenerse.
+- Al abrir la app, la última canción retoma **directo en el segundo donde quedó**.
+- 🔒 Seguridad: los títulos que llegan de internet se muestran siempre como texto; caché privada en `~/.cache/puquichu`;
+  descargas con límite de tiempo y tamaño; base de datos más robusta.
+- Ya no necesita VLC (instalador más simple; base para Windows y Mac).
+- Se quitó el ecualizador (dependía de VLC); volverá más adelante.

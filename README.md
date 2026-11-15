@@ -6,7 +6,7 @@
 > **ichu** (quechua): el pasto de la puna, dorado en la temporada seca.
 > Los colores de la app son esas dos estaciones del campo andino.
 
-Hecho con **Python + PyQt6 + VLC + SQLite + yt-dlp**. Es una aplicación nativa de escritorio (no es una app web).
+Hecho con **Python + PyQt6 (QtMultimedia) + SQLite + yt-dlp**. Es una aplicación nativa de escritorio (no es una app web).
 
 ---
 
@@ -30,7 +30,7 @@ Hecho con **Python + PyQt6 + VLC + SQLite + yt-dlp**. Es una aplicación nativa 
 **Escritorio**
 - Tema por estación: **Puquy** (verde), **Ichu** (dorado) o automático según el mes.
 - Integración **MPRIS**: control desde el panel de KDE/GNOME y teclas multimedia.
-- Ecualizador, temporizador para dormir, notificaciones y atajos de teclado.
+- Audio limpio también con parlantes **Bluetooth**, temporizador para dormir, notificaciones y atajos de teclado.
 - Retoma la última canción donde la dejaste.
 
 ---
@@ -44,7 +44,7 @@ Hecho con **Python + PyQt6 + VLC + SQLite + yt-dlp**. Es una aplicación nativa 
 3. Haz **doble clic** en el archivo → se abre el Centro de software → **Instalar**.
 4. Busca **Puquichu** en tu menú de aplicaciones. 🌱
 
-Se instala solo lo necesario (VLC y ffmpeg). Tu música queda en `~/Música/Puquichu` y tu biblioteca en `~/.local/share/puquichu`.
+Se instala solo lo necesario (ffmpeg). Tu música queda en `~/Música/Puquichu` y tu biblioteca en `~/.local/share/puquichu`.
 Para desinstalar: desde el Centro de software o con `sudo apt remove puquichu` (tu música no se borra).
 
 ### Windows y macOS
@@ -55,7 +55,7 @@ Para desinstalar: desde el Centro de software o con `sudo apt remove puquichu` (
 ## 🛠️ Instalar desde el código (desarrolladores)
 
 ```bash
-sudo apt install vlc ffmpeg libnotify-bin python3-venv
+sudo apt install ffmpeg libnotify-bin python3-venv
 git clone https://github.com/LUISFTEC/puquichu.git puquichu
 cd puquichu
 python3 -m venv venv
@@ -100,6 +100,7 @@ Ubuntu 22.04 y 24.04 limpios, y lo publica en *Releases* con las notas de `packa
 | `core.py` | Lógica sin interfaz: configuración, base de datos y migraciones, detección de género, organización de archivos y los hilos de trabajo (`SearchDownloadWorker`, `YouTubeSearchWorker`, `OnlinePlayWorker`, `ChartWorker`, `ArtistTopWorker`). |
 | `theme.py` | Sistema de diseño: paleta de estaciones (`SEASONS`, `C`), iconos vectoriales (`draw_icon`), logo, carátulas y hoja de estilos (`build_qss`). |
 | `widgets.py` | Componentes dibujados a mano: barra de título, tarjetas, filas de resultados, tabla de biblioteca, diálogos, avisos, interruptores, barra deslizante. |
+| `player.py` | Motor de audio (QtMultimedia): reproduce archivos y enlaces en línea. |
 | `mpris.py` | Integración MPRIS2 por D-Bus. |
 | `assets/` | Ícono de la aplicación. |
 | `packaging/` | Receta de PyInstaller, script del `.deb` y notas de versión. |
@@ -153,4 +154,4 @@ Cada usuario es responsable de respetar los derechos de autor y los términos de
 
 Creado por **[LUISFTEC](https://github.com/LUISFTEC)**. Gracias a **Claude** (asistente de inteligencia artificial de Anthropic) por la ayuda en el diseño y la programación.
 
-Construido sobre [PyQt6](https://www.riverbankcomputing.com/software/pyqt/), [VLC / python-vlc](https://www.videolan.org/), [yt-dlp](https://github.com/yt-dlp/yt-dlp) y la API pública de [Deezer](https://developers.deezer.com/).
+Construido sobre [PyQt6](https://www.riverbankcomputing.com/software/pyqt/), [yt-dlp](https://github.com/yt-dlp/yt-dlp) y la API pública de [Deezer](https://developers.deezer.com/).

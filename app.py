@@ -13,7 +13,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import vlc
 from PyQt6.QtCore import QPoint, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
@@ -34,7 +33,6 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSlider,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -59,6 +57,7 @@ from core import (
     OnlinePlayWorker,
     SearchDownloadWorker,
     YouTubeSearchWorker,
+    clean_interrupted_downloads,
     detect_genre,
     extract_artist_from_title,
     genre_folder,
@@ -68,6 +67,8 @@ from core import (
     organize_and_classify_all_songs,
     save_settings,
 )
+from player import AudioEngine
+
 try:  # MPRIS solo existe en Linux (D-Bus)
     from mpris import MprisService, build_metadata
 except Exception:  # pragma: no cover - Windows / macOS
@@ -100,6 +101,7 @@ from widgets import (
     EditSongDialog,
     ElidedLabel,
     GenreTile,
+    PlainToolTips,
     HeroCard,
     LibraryDelegate,
     LibraryTable,
@@ -116,27 +118,6 @@ from widgets import (
 
 ICON_PATH = ASSETS_DIR / "puquichu.png" if (ASSETS_DIR / "puquichu.png").exists() else DATA_DIR / "puquichu.png"
 FAV_FILTER = "__fav__"
-
-EQ_NAMES_ES = {
-    "Flat": "Plano",
-    "Classical": "Clásica",
-    "Club": "Club",
-    "Dance": "Dance",
-    "Full bass": "Graves potentes",
-    "Full bass and treble": "Graves y agudos",
-    "Full treble": "Agudos potentes",
-    "Headphones": "Audífonos",
-    "Large Hall": "Sala grande",
-    "Live": "En vivo",
-    "Party": "Fiesta",
-    "Pop": "Pop",
-    "Reggae": "Reggae",
-    "Rock": "Rock",
-    "Ska": "Ska",
-    "Soft": "Suave",
-    "Soft rock": "Rock suave",
-    "Techno": "Techno",
-}
 
 EXPLORE_GENRES = [
     ("Huayno", "huaynos más escuchados"),
@@ -177,6 +158,7 @@ class PuquichuApp(QMainWindow):
         super().__init__()
         self.settings = load_settings()
         init_and_migrate_db()
+        clean_interrupted_downloads(self.settings)
         organize_and_classify_all_songs(self.settings)
 
         self.season = resolve_season(self.settings.get("season_theme", "auto"))
@@ -195,14 +177,21 @@ class PuquichuApp(QMainWindow):
         self.setStyleSheet(build_qss())
 
         # Motor de audio VLC nativo
-        self.vlc_instance = vlc.Instance("--no-xlib")
-        self.player = self.vlc_instance.media_player_new()
+        # Motor de audio (QtMultimedia): limpio también con parlantes Bluetooth
+        self.player = AudioEngine(self)
         self.player.audio_set_volume(int(self.settings.get("default_volume", 85)))
-        self._eq = None
+        self.player.ended.connect(self._on_track_ended)
+        self.player.failed.connect(self._on_player_failed)
 
         # Estado de reproducción
         self.current_song: dict | None = None
-        self.playlist_queue: list[dict] = []
+        self.playlist_queue: list[dict] = []   # lo que se ve en la tabla de la biblioteca
+        # Cola de reproducción: se "congela" al elegir una canción y se recorre en orden
+        # aunque la tabla se reordene. Cada entrada: {"kind": "local", "id": …} o {"kind": "online", "item": {…}}
+        self.context: list[dict] = []
+        self.context_pos = -1
+        self._ctx_recent: list[int] = []
+        self._auto_skips = 0
         self.up_next: list[int] = []
         self.history: list[int] = []
         self.selected_genre_filter = "Todos"
@@ -240,7 +229,6 @@ class PuquichuApp(QMainWindow):
         self.mpris = None
 
         self._build_ui()
-        self.apply_equalizer(int(self.settings.get("equalizer", -1)))
         try:
             self.mpris = MprisService(self) if MprisService else None
             if self.mpris and not self.mpris.ok:
@@ -297,6 +285,7 @@ class PuquichuApp(QMainWindow):
     @staticmethod
     def _label(text: str, obj_name: str, cls=QLabel) -> QLabel:
         lbl = cls(text)
+        lbl.setTextFormat(Qt.TextFormat.PlainText)  # títulos de internet nunca se interpretan como HTML
         lbl.setObjectName(obj_name)
         return lbl
 
@@ -377,7 +366,7 @@ class PuquichuApp(QMainWindow):
         self.sidebar_top_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.sidebar_top_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sidebar_top_list.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sidebar_top_list.itemClicked.connect(lambda it: self.play_song_by_id(it.data(Qt.ItemDataRole.UserRole)))
+        self.sidebar_top_list.itemClicked.connect(self._on_top_clicked)
         self.sidebar_top_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sidebar_top_list.customContextMenuRequested.connect(self._sidebar_context_menu)
         vbox.addWidget(self.sidebar_top_list, stretch=1)
@@ -874,7 +863,7 @@ class PuquichuApp(QMainWindow):
         vbox.addWidget(card)
 
         # Sonido y reproducción
-        card, lay = self._settings_card("sliders_v", "Sonido y reproducción", "Cómo se escucha, con qué calidad se guarda y cómo suena.")
+        card, lay = self._settings_card("sliders_v", "Sonido y reproducción", "Cómo se escucha y con qué calidad se guarda.")
         lay.addLayout(self._settings_row("Modo de escucha", "Al tocar una canción de internet siempre suena al instante. Tú decides si además se guarda.", None))
         listen_row = QHBoxLayout()
         listen_row.setSpacing(10)
@@ -911,17 +900,6 @@ class PuquichuApp(QMainWindow):
             )
         )
 
-        self.combo_eq = QComboBox()
-        self.combo_eq.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.combo_eq.setMinimumWidth(300)
-        self.combo_eq.addItem("Desactivado", -1)
-        for i in range(vlc.libvlc_audio_equalizer_get_preset_count()):
-            raw = vlc.libvlc_audio_equalizer_get_preset_name(i)
-            name = raw.decode() if isinstance(raw, bytes) else str(raw)
-            self.combo_eq.addItem(EQ_NAMES_ES.get(name, name), i)
-        self.combo_eq.setCurrentIndex(max(0, self.combo_eq.findData(int(self.settings.get("equalizer", -1)))))
-        self.combo_eq.currentIndexChanged.connect(self._on_eq_changed)
-        lay.addLayout(self._settings_row("Ecualizador", "Ajusta graves y agudos con un preajuste; se aplica al instante.", self.combo_eq))
 
         self.chk_auto_next = ToggleSwitch()
         self.chk_auto_next.setChecked(bool(self.settings.get("auto_next", True)))
@@ -1248,7 +1226,7 @@ class PuquichuApp(QMainWindow):
             self.recent_row.addWidget(self._label("Aquí aparecerá lo último que escuches.", "Muted"))
         for row in rows:
             card = SongCard(dict(row))
-            card.clicked.connect(self.play_song_by_id)
+            card.clicked.connect(lambda sid, row=self.recent_row: self._play_song_card_row(row, sid))
             card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             card.customContextMenuRequested.connect(lambda pos, c=card: self.show_song_menu(c.song["id"], c.mapToGlobal(pos)))
             self.recent_row.addWidget(card)
@@ -1433,15 +1411,21 @@ class PuquichuApp(QMainWindow):
         if query == self._last_query:
             self.results_hint.setText(f"No se pudo buscar en YouTube (¿sin internet?). {err[:160]}")
 
-    def _on_result_activated(self, row: ResultRow):
+    @staticmethod
+    def _row_entry(row: ResultRow) -> dict:
         if row.kind == "local":
-            self.play_song_by_id(row.data["id"])
-            return
+            return {"kind": "local", "id": row.data["id"]}
         local_song = row.data.get("local_song")
         if local_song and os.path.exists(local_song.get("file_path", "")):
-            self.play_song_by_id(local_song["id"])
-            return
-        self.play_online(dict(row.data))
+            return {"kind": "local", "id": local_song["id"]}
+        return {"kind": "online", "item": dict(row.data)}
+
+    def _on_result_activated(self, row: ResultRow):
+        # La cola es la sección donde está la fila (resultados de búsqueda, género de Explorar o top del artista)
+        box = next((b for b in (self.results_box, self.explore_box, self.sp_online_box) if b.indexOf(row) >= 0), None)
+        rows = [box.itemAt(i).widget() for i in range(box.count())] if box else [row]
+        rows = [r for r in rows if isinstance(r, ResultRow)]
+        self.play_from([self._row_entry(r) for r in rows], rows.index(row) if row in rows else 0)
 
     def _rows_for(self, vid: str) -> list[ResultRow]:
         return [r for r in (self.result_rows.get(vid), self.explore_rows.get(vid), self.artist_rows.get(vid)) if r is not None]
@@ -1567,8 +1551,9 @@ class PuquichuApp(QMainWindow):
         worker.finished.connect(lambda w=worker: self._workers.discard(w))
         worker.start()
 
-    def play_online(self, item: dict, done_cb=None):
+    def play_online(self, item: dict, done_cb=None, quiet: bool = False):
         """Suena al instante desde internet; si el modo es 'guardar', se descarga en paralelo."""
+        self._online_quiet = quiet
         if self._is_repeat_click(("online", item.get("id") or item.get("query"))):
             if done_cb:
                 done_cb()
@@ -1585,7 +1570,8 @@ class PuquichuApp(QMainWindow):
         self._online_done_cb = done_cb
         if item.get("id"):
             self._set_row_state(item["id"], "Cargando…")
-        self.toast.show_message("Conectando…", 1800)
+        if not quiet:
+            self.toast.show_message("Conectando…", 1800)
         worker = OnlinePlayWorker(self._play_token, item, self.settings.get("audio_format", "best"))
         worker.ready.connect(self._on_online_ready)
         worker.failed.connect(self._on_online_failed)
@@ -1631,6 +1617,12 @@ class PuquichuApp(QMainWindow):
     def _on_online_failed(self, token: int, err: str):
         self._finish_online_cb(token)
         if token != self._play_token:
+            return
+        if getattr(self, "_online_quiet", False) and self._auto_skips < 3:
+            # En reproducción continua no se interrumpe con un aviso: se pasa a la siguiente
+            self._auto_skips += 1
+            self.toast.show_message("Una canción no se pudo cargar, paso a la siguiente")
+            QTimer.singleShot(400, lambda: self.play_next_song(auto=True))
             return
         show_message(self, "No se pudo reproducir", f"{err[:400]}\n\n¿Hay internet? Si el problema sigue, actualiza el motor de descargas en Ajustes → Mantenimiento.", "error")
 
@@ -1857,7 +1849,7 @@ class PuquichuApp(QMainWindow):
         self.sp_more_scroll.setVisible(bool(others))
         for o in others:
             c = SongCard(o)
-            c.clicked.connect(self.play_song_by_id)
+            c.clicked.connect(lambda sid, row=self.sp_more_row: self._play_song_card_row(row, sid))
             c.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             c.customContextMenuRequested.connect(lambda pos, cc=c: self.show_song_menu(cc.song["id"], cc.mapToGlobal(pos)))
             self.sp_more_row.addWidget(c)
@@ -2108,18 +2100,29 @@ class PuquichuApp(QMainWindow):
         self.charts_loaded.discard(kind)
         self.chart_status[kind].setText(f"No se pudo cargar (¿sin internet?). {err[:120]}")
 
+    def _chart_entry(self, track: dict, library: list[dict]) -> dict:
+        for song in library:
+            if self._match_library(track, [((song["title"] or "").lower(), (song["artist"] or "").lower())]) and os.path.exists(song["file_path"]):
+                return {"kind": "local", "id": song["id"]}
+        return {"kind": "online", "item": {"query": track["query"], "title": track["title"], "artist": track["artist"],
+                                           "duration": track["duration"], "cover": track.get("cover", "")}}
+
     def play_chart_card(self, card: ChartCard):
-        t = card.track
-        if card.in_library:
-            with get_db() as conn:
-                rows = [dict(r) for r in conn.execute("SELECT * FROM songs")]
-            for song in rows:
-                if self._match_library(t, [((song["title"] or "").lower(), (song["artist"] or "").lower())]) and os.path.exists(song["file_path"]):
-                    self.play_song_by_id(song["id"])
-                    return
-        card.set_loading(True)
-        item = {"query": t["query"], "title": t["title"], "artist": t["artist"], "duration": t["duration"], "cover": t.get("cover", "")}
-        self.play_online(item, done_cb=lambda c=card: c.set_loading(False))
+        row = card.parentWidget().layout() if card.parentWidget() else None
+        cards = [row.itemAt(i).widget() for i in range(row.count())] if row else [card]
+        cards = [c for c in cards if isinstance(c, ChartCard)]
+        with get_db() as conn:
+            library = [dict(r) for r in conn.execute("SELECT id, title, artist, file_path FROM songs")]
+        entries = [self._chart_entry(c.track, library) if c.in_library else
+                   {"kind": "online", "item": {"query": c.track["query"], "title": c.track["title"], "artist": c.track["artist"],
+                                               "duration": c.track["duration"], "cover": c.track.get("cover", "")}}
+                   for c in cards]
+        pos = cards.index(card) if card in cards else 0
+        if entries[pos]["kind"] == "online":
+            card.set_loading(True)
+            entries[pos]["item"]["_done"] = True
+            self._chart_loading_card = card
+        self.play_from(entries, pos)
 
     def load_explore_genre(self, label: str):
         query = dict(EXPLORE_GENRES)[label]
@@ -2154,10 +2157,12 @@ class PuquichuApp(QMainWindow):
     # =================================================================
     # REPRODUCCIÓN
     # =================================================================
+    def _library_entries(self) -> list[dict]:
+        return [{"kind": "local", "id": s["id"]} for s in self.playlist_queue]
+
     def on_library_row_activated(self, row: int, _col: int):
-        item = self.library_table.item(row, 0)
-        if item:
-            self.play_song_by_id(item.data(Qt.ItemDataRole.UserRole))
+        if 0 <= row < len(self.playlist_queue):
+            self.play_from(self._library_entries(), row)
 
     def on_library_cell_clicked(self, row: int, col: int):
         if col == LibraryTable.COL_FAV:
@@ -2170,9 +2175,9 @@ class PuquichuApp(QMainWindow):
             return
         if self.shuffle_enabled != shuffle:
             self.toggle_shuffle()
-        first = random.choice(self.playlist_queue) if shuffle else self.playlist_queue[0]
         self.up_next.clear()
-        self.play_song_by_id(first["id"])
+        pos = random.randrange(len(self.playlist_queue)) if shuffle else 0
+        self.play_from(self._library_entries(), pos)
 
     def _is_repeat_click(self, key) -> bool:
         """Evita que un doble clic arranque la misma canción dos veces ('bun bun' al inicio)."""
@@ -2182,27 +2187,31 @@ class PuquichuApp(QMainWindow):
         self._last_play_key, self._last_play_time = key, now
         return False
 
-    def play_song_by_id(self, song_id: int, record_history: bool = True):
+    def play_song_by_id(self, song_id: int, record_history: bool = True, quiet: bool = False) -> bool:
         if self._is_repeat_click(("song", song_id)):
-            return
+            return True
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
             row = conn.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
             if not row:
-                return
+                return False
             if not os.path.exists(row["file_path"]):
+                if quiet:
+                    return False
                 show_message(
                     self,
                     "Archivo no encontrado",
                     f"El archivo ya no está en:\n{row['file_path']}\n\nPuedes quitarlo en Ajustes → Mantenimiento.",
                     "warning",
                 )
-                return
+                return False
             conn.execute("UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ?", (now, song_id))
             conn.commit()
             song = dict(conn.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone())
         self.play_song_dict(song, was_downloaded=False, record_history=record_history)
+        self._auto_skips = 0 if not quiet else self._auto_skips
         self.refresh_all_views()
+        return True
 
     def play_song_dict(self, song: dict, was_downloaded: bool = False, record_history: bool = True, stream_url: str = ""):
         prev = self.current_song
@@ -2212,8 +2221,7 @@ class PuquichuApp(QMainWindow):
         self.current_song = song
         self.resume_ms = 0
         self._apply_now_playing_visuals(song, None if stream_url else was_downloaded)
-        self.player.set_media(self.vlc_instance.media_new(stream_url or song["file_path"]))
-        self.player.play()
+        self.player.load(stream_url or song["file_path"])
         self.media_loaded = True
         self.btn_play_pause.setEnabled(True)
         self._set_play_icon(True)
@@ -2287,12 +2295,12 @@ class PuquichuApp(QMainWindow):
     def toggle_play_pause(self):
         if not self.current_song:
             if self.playlist_queue:
-                self.play_song_by_id(self.playlist_queue[0]["id"])
+                self.play_from([{"kind": "local", "id": s["id"]} for s in self.playlist_queue], 0)
             return
         if not self.media_loaded:
-            # Continuar la sesión anterior desde donde se quedó
-            self.player.set_media(self.vlc_instance.media_new(self.current_song["file_path"]))
-            self.player.play()
+            # Continuar la sesión anterior: empieza directo en el segundo guardado
+            self.player.load(self.current_song["file_path"], start_ms=self.resume_ms)
+            self.resume_ms = 0
             self.media_loaded = True
             self._set_play_icon(True)
             self.hero_kicker.setText("SONANDO AHORA")
@@ -2300,8 +2308,8 @@ class PuquichuApp(QMainWindow):
             self.player.pause()
             self._set_play_icon(False)
         else:
-            if self.player.get_state() == vlc.State.Ended:
-                self.player.stop()
+            if self.player.is_ended():
+                self.player.set_time(0)
             self.player.play()
             self._set_play_icon(True)
         if self.mpris:
@@ -2317,41 +2325,106 @@ class PuquichuApp(QMainWindow):
             if self.mpris:
                 self.mpris.seeked(target)
 
+    # ----------------------------- Cola de reproducción -----------------------------
+    def play_from(self, entries: list[dict], pos: int):
+        """Reproduce la entrada 'pos' y recuerda la lista completa para seguir en orden."""
+        if not entries:
+            return
+        self.context = list(entries)
+        self.context_pos = max(0, min(pos, len(entries) - 1))
+        self._ctx_recent = [self.context_pos]
+        self._auto_skips = 0
+        self._play_entry(self.context[self.context_pos])
+
+    def _play_entry(self, entry: dict, record_history: bool = True, quiet: bool = False) -> bool:
+        if entry["kind"] == "local":
+            return self.play_song_by_id(entry["id"], record_history=record_history, quiet=quiet)
+        item = dict(entry["item"])
+        done = None
+        if item.pop("_done", False) and getattr(self, "_chart_loading_card", None) is not None:
+            card = self._chart_loading_card
+            done = lambda c=card: c.set_loading(False)  # noqa: E731
+        self.play_online(item, done_cb=done, quiet=quiet)
+        return True
+
+    def _ensure_context(self):
+        """Si no hay cola (p. ej. tras abrir la app), usa la biblioteca en el orden visible."""
+        if self.context:
+            return
+        self.context = [{"kind": "local", "id": s["id"]} for s in self.playlist_queue]
+        cur = self.current_song.get("id") if self.current_song else None
+        self.context_pos = next((i for i, e in enumerate(self.context) if e.get("id") == cur), -1)
+
+    def _next_index(self) -> int:
+        n = len(self.context)
+        if self.shuffle_enabled and n > 1:
+            # Aleatorio sin repetir lo que sonó hace poco
+            recent = set(self._ctx_recent[-min(n - 1, 15):]) | {self.context_pos}
+            choices = [i for i in range(n) if i not in recent] or [i for i in range(n) if i != self.context_pos]
+            return random.choice(choices)
+        return (self.context_pos + 1) % n
+
     def play_next_song(self, auto: bool = False):
         if self.up_next:
             self.play_song_by_id(self.up_next.pop(0))
+            self._refresh_visual_state()
             return
-        if not self.playlist_queue:
+        self._ensure_context()
+        if not self.context:
             return
-        ids = [s["id"] for s in self.playlist_queue]
-        if not self.current_song:
-            self.play_song_by_id(ids[0])
-            return
-        cur = self.current_song["id"]
-        if self.shuffle_enabled and len(ids) > 1:
-            # Aleatorio sin repetir lo que sonó hace poco
-            recent = set(self.history[-min(len(ids) - 1, 15):]) | {cur}
-            choices = [i for i in ids if i not in recent] or [i for i in ids if i != cur]
-            self.play_song_by_id(random.choice(choices))
-        elif cur in ids:
-            self.play_song_by_id(ids[(ids.index(cur) + 1) % len(ids)])
-        else:
-            self.play_song_by_id(ids[0])
+        for _attempt in range(min(len(self.context), 5)):
+            self.context_pos = self._next_index()
+            self._ctx_recent.append(self.context_pos)
+            del self._ctx_recent[:-50]
+            if self._play_entry(self.context[self.context_pos], quiet=auto):
+                return
 
     def play_previous_song(self):
         if self.current_song and self.media_loaded and self.player.get_time() > 3000:
             self.player.set_time(0)
             return
-        if self.history:
+        if self.shuffle_enabled and self.history:
             self.play_song_by_id(self.history.pop(), record_history=False)
             return
-        if not self.playlist_queue:
+        self._ensure_context()
+        if self.context:
+            self.context_pos = (self.context_pos - 1) % len(self.context)
+            self._play_entry(self.context[self.context_pos], record_history=False)
+        elif self.history:
+            self.play_song_by_id(self.history.pop(), record_history=False)
+
+    def _on_track_ended(self):
+        if not self.current_song:
             return
-        ids = [s["id"] for s in self.playlist_queue]
-        if self.current_song and self.current_song["id"] in ids:
-            self.play_song_by_id(ids[(ids.index(self.current_song["id"]) - 1) % len(ids)], record_history=False)
+        if self.sleep_end_of_track:
+            self.sleep_end_of_track = False
+            self.player.stop()
+            self._refresh_visual_state()
+            self.toast.show_message("Temporizador: la canción terminó. ¡Buenas noches!", 4000)
+        elif self.loop_enabled:
+            self.player.set_time(0)
+            self.player.play()
+        elif self.settings.get("auto_next", True):
+            self._ensure_context()
+            if self.up_next or len(self.context) > 1:
+                self.play_next_song(auto=True)
+                return
+            self.player.stop()
+            self.seek_slider.setValue(0)
         else:
-            self.play_song_by_id(ids[0])
+            self.player.stop()
+            self.seek_slider.setValue(0)
+
+    def _on_player_failed(self, message: str):
+        """Archivo dañado o enlace caducado: si estaba en reproducción continua, salta a la siguiente."""
+        if not self.current_song:
+            return
+        if self.settings.get("auto_next", True) and self._auto_skips < 3 and (self.up_next or len(self.context) > 1):
+            self._auto_skips += 1
+            self.toast.show_message(f"No se pudo reproducir «{display_title(self.current_song['title'])}», paso a la siguiente")
+            QTimer.singleShot(400, lambda: self.play_next_song(auto=True))
+        else:
+            self.toast.show_message(f"No se pudo reproducir: {message[:120]}", 4000)
 
     def toggle_loop(self):
         self.loop_enabled = not self.loop_enabled
@@ -2421,9 +2494,6 @@ class PuquichuApp(QMainWindow):
         length_ms = self.player.get_length()
         cur_ms = self.player.get_time()
         if length_ms > 0:
-            if self.resume_ms:
-                self.player.set_time(min(self.resume_ms, length_ms - 1000))
-                self.resume_ms = 0
             if not self.current_song.get("duration") and self.current_song.get("id"):
                 secs = length_ms // 1000
                 self.current_song["duration"] = secs
@@ -2434,24 +2504,6 @@ class PuquichuApp(QMainWindow):
             self.lbl_time_tot.setText(self._fmt_ms(length_ms))
             if not self.is_seeking:
                 self.seek_slider.setValue(max(0, min(1000, int(cur_ms / length_ms * 1000))))
-
-        if self.player.get_state() == vlc.State.Ended:
-            if self.sleep_end_of_track:
-                self.sleep_end_of_track = False
-                self.player.stop()
-                self._refresh_visual_state()
-                self.toast.show_message("Temporizador: la canción terminó. ¡Buenas noches!", 4000)
-            elif self.loop_enabled:
-                if self.current_song.get("id"):
-                    self.play_song_by_id(self.current_song["id"], record_history=False)
-                else:
-                    self.player.stop()
-                    self.player.play()
-            elif self.settings.get("auto_next", True) and (self.up_next or len(self.playlist_queue) > 1):
-                self.play_next_song(auto=True)
-            else:
-                self.player.stop()
-                self.seek_slider.setValue(0)
 
         status = self.mpris_status()
         if status != self._last_status:
@@ -2500,7 +2552,8 @@ class PuquichuApp(QMainWindow):
                 r = conn.execute("SELECT title, artist FROM songs WHERE id = ?", (sid,)).fetchone()
                 if not r:
                     continue
-                act = menu.addAction(make_icon("play", C["muted"], 14), f"{pos + 1}.  {display_title(r['title'], r['artist'])} — {r['artist']}")
+                label = f"{pos + 1}.  {display_title(r['title'], r['artist'])} — {r['artist']}".replace("&", "&&")
+                act = menu.addAction(make_icon("play", C["muted"], 14), label)
                 act.triggered.connect(lambda _c=False, p=pos: self._play_from_queue(p))
         if self.up_next:
             menu.addSeparator()
@@ -2678,6 +2731,18 @@ class PuquichuApp(QMainWindow):
             if id_item:
                 self.show_song_menu(id_item.data(Qt.ItemDataRole.UserRole), self.library_table.viewport().mapToGlobal(pos))
 
+    def _play_song_card_row(self, row_layout, song_id: int):
+        ids = [row_layout.itemAt(i).widget().song["id"] for i in range(row_layout.count())
+               if isinstance(row_layout.itemAt(i).widget(), SongCard)]
+        if song_id not in ids:
+            ids = [song_id]
+        self.play_from([{"kind": "local", "id": i} for i in ids], ids.index(song_id))
+
+    def _on_top_clicked(self, item: QListWidgetItem):
+        lst = self.sidebar_top_list
+        entries = [{"kind": "local", "id": lst.item(i).data(Qt.ItemDataRole.UserRole)} for i in range(lst.count())]
+        self.play_from(entries, lst.row(item))
+
     def _sidebar_context_menu(self, pos):
         item = self.sidebar_top_list.itemAt(pos)
         if item:
@@ -2749,24 +2814,6 @@ class PuquichuApp(QMainWindow):
             sc(QKeySequence(Qt.Key.Key_MediaNext), lambda: self.play_next_song())
             sc(QKeySequence(Qt.Key.Key_MediaPrevious), self.play_previous_song)
 
-    def _on_eq_changed(self):
-        idx = int(self.combo_eq.currentData())
-        self.settings["equalizer"] = idx
-        save_settings(self.settings)
-        self.apply_equalizer(idx)
-        self.toast.show_message(f"Ecualizador: {self.combo_eq.currentText()}")
-
-    def apply_equalizer(self, idx: int):
-        try:
-            if idx < 0:
-                self.player.set_equalizer(None)
-                self._eq = None
-            else:
-                self._eq = vlc.libvlc_audio_equalizer_new_from_preset(idx)
-                self.player.set_equalizer(self._eq)
-        except Exception:
-            pass
-
     def desktop_notify(self, title: str, body: str, icon: str = ""):
         if not self.settings.get("notifications", True) or self.isActiveWindow() or not shutil.which("notify-send"):
             return
@@ -2821,6 +2868,12 @@ class PuquichuApp(QMainWindow):
         self.settings["default_volume"] = self.vol_slider.value()
         save_settings(self.settings)
         self.player.stop()
+        self.timer.stop()
+        # Dar un momento a los trabajos en segundo plano (búsquedas, portadas, descargas)
+        running = [w for w in [*self._workers, self.worker, self.search_worker, *self._old_search_workers] if w and w.isRunning()]
+        deadline = time.monotonic() + 1.5
+        for w in running:
+            w.wait(max(0, int((deadline - time.monotonic()) * 1000)))
         super().closeEvent(e)
 
     # =================================================================
@@ -2947,90 +3000,78 @@ class PuquichuApp(QMainWindow):
             subprocess.Popen([opener, path_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _wait_playing(engine, min_ms: int, seconds: float) -> int:
+    """Procesa eventos hasta que el motor avance min_ms (usado por la prueba automática)."""
+    deadline = time.time() + seconds
+    while time.time() < deadline and engine.get_time() < min_ms:
+        QApplication.processEvents()
+        time.sleep(0.05)
+    return engine.get_time()
+
+
+def _smoke_test(window, app):
+    """Prueba automática usada por GitHub Actions: arranque, audio local y (opcional) en línea."""
+    try:
+        import tempfile
+
+        tone = Path(tempfile.gettempdir()) / "puquichu_tono_prueba.webm"  # WebM/Opus, como YouTube
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libopus", str(tone)],
+            check=True, timeout=30,
+        )
+        engine = AudioEngine()
+        engine.audio_set_volume(0)
+        engine.load(str(tone))
+        played = _wait_playing(engine, 1000, 10)
+        engine.stop()
+        print(f"PUQUICHU_AUDIO_LOCAL_{'OK' if played >= 1000 else 'FALLO'} {played} ms", flush=True)
+    except Exception as e:
+        print(f"PUQUICHU_AUDIO_LOCAL_FALLO {type(e).__name__}: {e}", flush=True)
+    if os.environ["PUQUICHU_SMOKE_TEST"] == "red":
+        try:
+            import yt_dlp
+
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}) as ydl:
+                hit = ydl.extract_info("ytsearch1:los kjarkas llorando se fue", download=False)["entries"][0]
+            print(f"PUQUICHU_RED_OK {hit.get('title')}", flush=True)
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "format": "bestaudio[acodec=opus]/bestaudio"}) as ydl:
+                stream = ydl.extract_info(hit["url"], download=False)["url"]
+            engine = AudioEngine()
+            engine.audio_set_volume(0)
+            engine.load(stream)
+            played = _wait_playing(engine, 1500, 15)
+            engine.stop()
+            print(f"PUQUICHU_AUDIO_{'OK' if played >= 1500 else 'FALLO'} {played} ms", flush=True)
+        except Exception as e:  # YouTube puede bloquear servidores de centros de datos
+            print(f"PUQUICHU_RED_FALLO {type(e).__name__}: {str(e)[:200]}", flush=True)
+    print(f"PUQUICHU_OK {APP_VERSION} yt-dlp {ytdlp_version()} mpris={'si' if window.mpris else 'no'}", flush=True)
+    window.close()
+    app.quit()
+
+
 def main():
     if os.environ.get("PUQUICHU_SMOKE_TEST"):
         import faulthandler
 
-        faulthandler.dump_traceback_later(20, exit=True)  # si se cuelga, muestra dónde
+        faulthandler.dump_traceback_later(60, exit=True)  # si se cuelga, muestra dónde
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     app.setDesktopFileName(APP_ID)
     app.setFont(QFont(UI_FONT, 10))
-    try:
-        probe = vlc.Instance("--no-xlib")
-        if probe is None:
-            raise RuntimeError("libvlc sin módulos")
-        probe.release()
-    except Exception as e:
-        print(f"PUQUICHU_VLC_ERROR {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        if os.environ.get("PUQUICHU_SMOKE_TEST"):
-            sys.exit(3)
-        from PyQt6.QtWidgets import QMessageBox
-
-        QMessageBox.critical(
-            None,
-            "Falta VLC",
-            "Puquichu usa VLC para reproducir la música, pero no está instalado.\n\n"
-            "En Ubuntu / Linux Mint / Debian ábrelo desde el Centro de software o ejecuta:\n"
-            "    sudo apt install vlc",
-        )
-        sys.exit(1)
+    tooltips = PlainToolTips(app)
+    app.installEventFilter(tooltips)
     window = PuquichuApp()
     window.show()
     if os.environ.get("PUQUICHU_SMOKE_TEST"):
-        # Usado por la integración continua: confirma que la app arranca y se cierra sola
-        def _smoke():
-            # Audio sin internet: genera un tono Opus con ffmpeg y lo reproduce con salida muda
-            try:
-                import tempfile
-
-                tone = Path(tempfile.gettempdir()) / "puquichu_tono_prueba.webm"  # WebM/Opus, como YouTube
-                subprocess.run(
-                    ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libopus", str(tone)],
-                    check=True, timeout=30,
-                )
-                inst = vlc.Instance("--no-xlib", "--aout=dummy")
-                local_player = inst.media_player_new()
-                local_player.set_media(inst.media_new(str(tone)))
-                local_player.play()
-                deadline = time.time() + 10
-                while time.time() < deadline and local_player.get_time() < 1000:
-                    time.sleep(0.1)
-                played = local_player.get_time()
-                local_player.stop()
-                print(f"PUQUICHU_AUDIO_LOCAL_{'OK' if played >= 1000 else 'FALLO'} {played} ms", flush=True)
-            except Exception as e:
-                print(f"PUQUICHU_AUDIO_LOCAL_FALLO {type(e).__name__}: {e}", flush=True)
-            if os.environ["PUQUICHU_SMOKE_TEST"] == "red":
-                try:
-                    import yt_dlp
-
-                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}) as ydl:
-                        hit = ydl.extract_info("ytsearch1:los kjarkas llorando se fue", download=False)["entries"][0]
-                    print(f"PUQUICHU_RED_OK {hit.get('title')}", flush=True)
-                    # Reproduce unos segundos (salida de audio muda) para comprobar códecs y streaming
-                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "format": "bestaudio[acodec=opus]/bestaudio"}) as ydl:
-                        stream = ydl.extract_info(hit["url"], download=False)["url"]
-                    inst = vlc.Instance("--no-xlib", "--aout=dummy")
-                    test_player = inst.media_player_new()
-                    test_player.set_media(inst.media_new(stream))
-                    test_player.play()
-                    deadline = time.time() + 15
-                    while time.time() < deadline and test_player.get_time() < 1500:
-                        time.sleep(0.2)
-                    played = test_player.get_time()
-                    test_player.stop()
-                    print(f"PUQUICHU_AUDIO_{'OK' if played >= 1500 else 'FALLO'} {played} ms", flush=True)
-                except Exception as e:  # YouTube puede bloquear servidores de centros de datos
-                    print(f"PUQUICHU_RED_FALLO {type(e).__name__}: {str(e)[:200]}", flush=True)
-            print(f"PUQUICHU_OK {APP_VERSION} yt-dlp {ytdlp_version()} mpris={'si' if window.mpris else 'no'}", flush=True)
-            window.close()
-            app.quit()
-
-        QTimer.singleShot(2500, _smoke)
-    sys.exit(app.exec())
+        QTimer.singleShot(2500, lambda: _smoke_test(window, app))
+    code = app.exec()
+    # Los datos ya se guardaron al cerrar la ventana. Si quedó algún hilo esperando a internet,
+    # se sale sin esperarlo (evita errores o cierres forzados al apagar Python con hilos vivos).
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":
