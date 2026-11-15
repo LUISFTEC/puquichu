@@ -34,24 +34,40 @@ class AudioEngine(QObject):
         self._pending_start = 0
         self._autoplay = False
         self._volume = 85
+        self._load_id = 0
+        self._failed_id = -1
+        self._last_pos = 0
         self._player.mediaStatusChanged.connect(self._on_status)
         self._player.errorOccurred.connect(self._on_error)
+        self._player.positionChanged.connect(self._on_position)
         # Si el usuario cambia la salida del sistema (p. ej. conecta un parlante Bluetooth), seguirla
         self._devices.audioOutputsChanged.connect(self._follow_default_output)
 
     # ------------------------------------------------------------------ carga
     def load(self, source: str, start_ms: int = 0, autoplay: bool = True):
         """Carga un archivo local o una URL. Empieza directo en start_ms (sin sonar antes desde 0)."""
+        self._load_id += 1
         self.sync_external_move()
         url = QUrl(source) if source.startswith(("http://", "https://")) else QUrl.fromLocalFile(source)
         self._pending_start = max(0, int(start_ms))
+        self._last_pos = self._pending_start
         self._autoplay = autoplay
         self._player.setSource(url)
         if autoplay and not self._pending_start:
             self._player.play()
 
+    def _on_position(self, pos: int):
+        if pos > 0:
+            self._last_pos = int(pos)
+
+    def _emit_failed(self, lid: int, msg: str):
+        if lid == self._load_id and self._failed_id != lid:
+            self._failed_id = lid
+            self.failed.emit(msg)
+
     def _on_status(self, status):
         Status = QMediaPlayer.MediaStatus
+        lid = self._load_id
         if status in (Status.LoadedMedia, Status.BufferedMedia) and self._pending_start:
             start, self._pending_start = self._pending_start, 0
             if self._player.isSeekable():
@@ -60,14 +76,15 @@ class AudioEngine(QObject):
                 self._player.play()
         elif status == Status.EndOfMedia:
             # Se avisa en el siguiente ciclo: cargar otra canción dentro de esta señal bloquea a Qt
-            QTimer.singleShot(0, self.ended.emit)
+            QTimer.singleShot(0, lambda: self.ended.emit() if lid == self._load_id else None)
         elif status == Status.InvalidMedia:
             msg = self._player.errorString() or "Formato de audio no válido"
-            QTimer.singleShot(0, lambda: self.failed.emit(msg))
+            QTimer.singleShot(0, lambda: self._emit_failed(lid, msg))
 
     def _on_error(self, _error, message: str):
         if message:
-            QTimer.singleShot(0, lambda: self.failed.emit(message))
+            lid = self._load_id
+            QTimer.singleShot(0, lambda: self._emit_failed(lid, message))
 
     # ---------------------------------------------------- salida de audio
     @staticmethod
@@ -152,8 +169,16 @@ class AudioEngine(QObject):
         self._player.pause()
 
     def stop(self):
+        self._load_id += 1
         self._pending_start = 0
+        self._last_pos = 0
         self._player.stop()
+
+    def is_remote(self) -> bool:
+        return self._player.source().scheme() in ("http", "https")
+
+    def last_position(self) -> int:
+        return max(int(self._player.position()), self._last_pos)
 
     def is_playing(self) -> bool:
         return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState

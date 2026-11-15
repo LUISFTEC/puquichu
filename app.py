@@ -2425,8 +2425,12 @@ class PuquichuApp(QMainWindow):
             self.seek_slider.setValue(0)
 
     def _on_player_failed(self, message: str):
-        """Archivo dañado o enlace caducado: si estaba en reproducción continua, salta a la siguiente."""
+        """Archivo dañado o enlace caducado: si ya se guardó en disco, retoma desde el archivo local."""
         if not self.current_song:
+            return
+        local_path = self.current_song.get("file_path") or ""
+        if self.player.is_remote() and local_path and os.path.exists(local_path):
+            self.player.load(local_path, start_ms=self.player.last_position())
             return
         if self.settings.get("auto_next", True) and self._auto_skips < 3 and (self.up_next or len(self.context) > 1):
             self._auto_skips += 1
